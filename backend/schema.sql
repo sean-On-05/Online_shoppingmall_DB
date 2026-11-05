@@ -1,0 +1,91 @@
+﻿PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS CUSTOMER (
+ customer_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ username TEXT NOT NULL UNIQUE,
+ name TEXT NOT NULL,
+ email TEXT UNIQUE,
+ phone TEXT,
+ address TEXT,
+ password_hash TEXT NOT NULL,
+ is_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0,1)),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS CATEGORY (
+ category_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ category_name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS PRODUCT (
+ product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ category_id INTEGER NOT NULL REFERENCES CATEGORY(category_id),
+ product_name TEXT NOT NULL,
+ price INTEGER NOT NULL CHECK(price > 0),
+ status TEXT NOT NULL DEFAULT '판매중',
+ original_price INTEGER CHECK(original_price IS NULL OR original_price > price),
+ image TEXT NOT NULL,
+ description TEXT NOT NULL,
+ label TEXT
+);
+CREATE TABLE IF NOT EXISTS WAREHOUSE (
+ warehouse_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ warehouse_name TEXT NOT NULL,
+ location TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS INVENTORY (
+ product_id INTEGER NOT NULL REFERENCES PRODUCT(product_id) ON DELETE CASCADE,
+ warehouse_id INTEGER NOT NULL REFERENCES WAREHOUSE(warehouse_id),
+ quantity INTEGER NOT NULL CHECK(quantity >= 0),
+ PRIMARY KEY(product_id, warehouse_id)
+);
+CREATE TABLE IF NOT EXISTS CART (
+ cart_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ customer_id INTEGER UNIQUE REFERENCES CUSTOMER(customer_id),
+ owner_key TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS CART_ITEM (
+ cart_id INTEGER NOT NULL REFERENCES CART(cart_id) ON DELETE CASCADE,
+ product_id INTEGER NOT NULL REFERENCES PRODUCT(product_id) ON DELETE CASCADE,
+ quantity INTEGER NOT NULL CHECK(quantity BETWEEN 1 AND 99),
+ PRIMARY KEY(cart_id,product_id)
+);
+CREATE TABLE IF NOT EXISTS ORDERS (
+ order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ order_code TEXT NOT NULL UNIQUE,
+ customer_id INTEGER REFERENCES CUSTOMER(customer_id),
+ owner_key TEXT NOT NULL,
+ order_date TEXT NOT NULL,
+ subtotal INTEGER NOT NULL CHECK(subtotal >= 0),
+ shipping_fee INTEGER NOT NULL CHECK(shipping_fee >= 0),
+ total_amount INTEGER NOT NULL CHECK(total_amount = subtotal + shipping_fee),
+ order_status TEXT NOT NULL CHECK(order_status IN ('주문접수','배송준비','배송중','배송완료','취소'))
+);
+CREATE TABLE IF NOT EXISTS ORDER_ITEM (
+ order_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ order_id INTEGER NOT NULL REFERENCES ORDERS(order_id) ON DELETE CASCADE,
+ product_id INTEGER REFERENCES PRODUCT(product_id) ON DELETE SET NULL,
+ original_product_id INTEGER NOT NULL,
+ product_name TEXT NOT NULL,
+ image TEXT NOT NULL,
+ quantity INTEGER NOT NULL CHECK(quantity > 0),
+ unit_price INTEGER NOT NULL CHECK(unit_price > 0)
+);
+CREATE TABLE IF NOT EXISTS PAYMENT (
+ payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ order_id INTEGER NOT NULL UNIQUE REFERENCES ORDERS(order_id) ON DELETE CASCADE,
+ payment_method TEXT NOT NULL,
+ payment_status TEXT NOT NULL,
+ payment_date TEXT
+);
+CREATE TABLE IF NOT EXISTS SHIPMENT (
+ shipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+ order_id INTEGER NOT NULL UNIQUE REFERENCES ORDERS(order_id) ON DELETE CASCADE,
+ tracking_number TEXT,
+ shipping_address TEXT NOT NULL,
+ shipping_status TEXT NOT NULL,
+ recipient TEXT NOT NULL,
+ phone TEXT NOT NULL,
+ postal_code TEXT NOT NULL,
+ address_detail TEXT NOT NULL DEFAULT '',
+ memo TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS orders_customer_idx ON ORDERS(customer_id);
+CREATE INDEX IF NOT EXISTS order_item_product_idx ON ORDER_ITEM(product_id);
