@@ -25,7 +25,16 @@ def customer_id(db, key):
 def load_state(db):
     products = []
     for r in db.execute('SELECT p.*, c.category_name, COALESCE((SELECT SUM(quantity) FROM INVENTORY i WHERE i.product_id=p.product_id),0) AS stock FROM PRODUCT p JOIN CATEGORY c USING(category_id) ORDER BY p.product_id DESC'):
-        p = dict(id=r['product_id'], name=r['product_name'], category=r['category_name'], price=r['price'], stock=r['stock'], image=r['image'], description=r['description'])
+        p = dict(
+            id=r['product_id'],
+            name=r['product_name'],
+            category=r['category_name'],
+            price=r['price'],
+            stock=r['stock'],
+            status=r['status'],
+            image=r['image'],
+            description=r['description']
+        )
         if r['original_price'] is not None: p['originalPrice'] = r['original_price']
         if r['label'] is not None: p['label'] = r['label']
         products.append(p)
@@ -45,7 +54,7 @@ def save_state(db, state):
         db.execute('INSERT OR IGNORE INTO CATEGORY(category_name) VALUES (?)', (p['category'],))
         category = db.execute('SELECT category_id FROM CATEGORY WHERE category_name=?', (p['category'],)).fetchone()[0]
         db.execute('''INSERT INTO PRODUCT(product_id,category_id,product_name,price,original_price,image,description,label,status) VALUES (?,?,?,?,?,?,?,?,?)
-          ON CONFLICT(product_id) DO UPDATE SET category_id=excluded.category_id,product_name=excluded.product_name,price=excluded.price,original_price=excluded.original_price,image=excluded.image,description=excluded.description,label=excluded.label,status=excluded.status''', (p['id'],category,p['name'],p['price'],p.get('originalPrice'),p['image'],p['description'],p.get('label'),'판매중' if p['stock'] else '품절'))
+          ON CONFLICT(product_id) DO UPDATE SET category_id=excluded.category_id,product_name=excluded.product_name,price=excluded.price,original_price=excluded.original_price,image=excluded.image,description=excluded.description,label=excluded.label,status=excluded.status''', (p['id'],category,p['name'],p['price'],p.get('originalPrice'),p['image'],p['description'],p.get('label'),p.get('status', '판매중')))
         # Current UI edits total stock. Increases go to the default warehouse;
         # reductions consume existing warehouse rows without losing their identities.
         rows = db.execute('SELECT warehouse_id,quantity FROM INVENTORY WHERE product_id=? ORDER BY warehouse_id', (p['id'],)).fetchall()
