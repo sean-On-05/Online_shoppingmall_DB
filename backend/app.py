@@ -201,11 +201,15 @@ def save(pid=None):
 @app.delete('/api/products/<int:pid>')
 def delete(pid):
     admin()
+
     def change(s):
-        product(s,pid)
-        if any(o['status'] not in ['취소','배송완료'] and any(i['productId']==pid for i in o['items']) for o in s['orders']): abort(409,'진행 중인 주문에 포함된 상품입니다.')
-        s['products']=[p for p in s['products'] if p['id']!=pid]
-        for key in s['carts']: s['carts'][key]=[i for i in s['carts'][key] if i['productId']!=pid]
+        p = product(s, pid)
+
+        if p['status'] == '판매중지':
+            abort(409, '이미 판매 중지된 상품입니다.')
+
+        p['status'] = '판매중지'
+
     return transact(change)
 @app.post('/api/orders')
 def order():
@@ -219,6 +223,8 @@ def order():
         lines=[]
         for i in items:
             p=product(s,i['productId'])
+            if p['status'] != '판매중':
+                abort(409, '판매 중지된 상품은 주문할 수 없습니다.')
             if i['quantity']>p['stock']: abort(409,'재고가 부족합니다.')
             p['stock']-=i['quantity']; lines.append({'productId':p['id'],'name':p['name'],'image':p['image'],'price':p['price'],'quantity':i['quantity']})
         subtotal=sum(i['price']*i['quantity'] for i in lines); fee=0 if subtotal>=50000 else 3000
