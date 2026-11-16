@@ -58,13 +58,12 @@ def restore_inventory(db, product_id, warehouse_id, quantity):
         raise ValueError("복구할 상품 또는 창고 재고가 존재하지 않습니다.")
 
 
-def cancel_order(db, order_code, warehouse_id=1):
-    """주문 취소, 재고 복구, 모의 결제 취소."""
+def cancel_order(db, order_code):
+    """주문을 취소하고 원래 출고 창고에 재고를 복구한다."""
 
-    # 1. 주문 조회
     order = db.execute(
         """
-        SELECT order_id, order_status
+        SELECT order_id, order_status, warehouse_id
         FROM ORDERS
         WHERE order_code = ?
         """,
@@ -75,21 +74,20 @@ def cancel_order(db, order_code, warehouse_id=1):
         raise ValueError("존재하지 않는 주문입니다.")
 
     order_id = order["order_id"]
+    warehouse_id = order["warehouse_id"]
 
-    # 2. 취소 가능 상태 확인
     if order["order_status"] != "주문접수":
         raise ValueError("주문 접수 상태에서만 취소할 수 있습니다.")
 
-    # 3. 배송 정보 등록 여부 확인
+    # 배송 정보가 등록된 주문은 취소 불가
     shipment = db.execute(
         "SELECT 1 FROM SHIPMENT WHERE order_id = ?",
         (order_id,)
     ).fetchone()
 
-    if shipment is not None:
+    if shipment:
         raise ValueError("배송 정보가 등록된 주문은 취소할 수 없습니다.")
 
-    # 4. 주문 상품 조회
     items = db.execute(
         """
         SELECT product_id, quantity
@@ -102,7 +100,7 @@ def cancel_order(db, order_code, warehouse_id=1):
     if not items:
         raise ValueError("주문 상품 정보가 없습니다.")
 
-    # 5. 재고 복구
+    # 주문 당시 출고 창고에 재고 복구
     for item in items:
         if item["product_id"] is None:
             raise ValueError("원래 상품을 찾을 수 없습니다.")
@@ -114,7 +112,6 @@ def cancel_order(db, order_code, warehouse_id=1):
             item["quantity"]
         )
 
-    # 6. 주문 상태 변경
     db.execute(
         """
         UPDATE ORDERS
@@ -124,18 +121,84 @@ def cancel_order(db, order_code, warehouse_id=1):
         (order_id,)
     )
 
-    # 7. 결제 정보가 있다면 함께 취소
+    # 결제 완료된 경우에만 모의 결제 취소
     db.execute(
         """
         UPDATE PAYMENT
         SET payment_status = '취소'
         WHERE order_id = ?
+          AND payment_status = '완료'
         """,
         (order_id,)
     )
 
     return order_code
 
+
+def process_payment(db, order_code, success=True, payment_method="카드"):
+    """모의 결제를 처리하고 PAYMENT 테이블에 저장한다."""
+
+    from datetime import datetime, timezone
+    
+    if payment_method not in ("카드", "계좌이체", "간편결제"):
+        raise ValueError("지원하지 않는 결제 수단입니다.")
+
+    # 주문 확인
+    order = db.execute(
+        """
+        SELECT order_id, order_status
+        FROM ORDERS
+        WHERE order_code = ?
+        """,
+        (order_code,)
+    ).fetchone()
+
+    if order is None:
+        raise ValueError("존재하지 않는 주문입니다.")
+
+    if order["order_status"] == "취소":
+        raise ValueError("취소된 주문은 결제할 수 없습니다.")
+
+    # 기존 결제 확인
+    payment = db.execute(
+        "SELECT payment_status FROM PAYMENT WHERE order_id = ?",
+        (order["order_id"],)
+    ).fetchone()
+
+    if payment and payment["payment_status"] == "완료":
+        raise ValueError("이미 결제가 완료된 주문입니다.")
+
+    if payment and payment["payment_status"] == "취소":
+        raise ValueError("취소된 결제는 다시 처리할 수 없습니다.")
+
+    payment_status = "완료" if success else "실패"
+    payment_date = (
+        datetime.now(timezone.utc).isoformat()
+        if success else None
+    )
+
+    db.execute(
+        """
+        INSERT INTO PAYMENT (
+            order_id, payment_method,
+            payment_status, payment_date
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(order_id)
+        DO UPDATE SET
+            payment_method = excluded.payment_method,
+            payment_status = excluded.payment_status,
+            payment_date = excluded.payment_date
+        """,
+        (
+            order["order_id"],
+            payment_method,
+            payment_status,
+            payment_date
+        )
+    )
+
+    return payment_status
 
 def create_order(db, owner_key, warehouse_id=1):
     """장바구니를 기준으로 주문 생성 및 재고 차감."""
@@ -197,9 +260,9 @@ def create_order(db, owner_key, warehouse_id=1):
         INSERT INTO ORDERS (
             order_code, customer_id, owner_key,
             order_date, subtotal, shipping_fee,
-            total_amount, order_status
+            total_amount, order_status, warehouse_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             order_code,
@@ -209,7 +272,8 @@ def create_order(db, owner_key, warehouse_id=1):
             subtotal,
             shipping_fee,
             subtotal + shipping_fee,
-            "주문접수"
+            "주문접수",
+            warehouse_id
         )
     )
 
@@ -327,16 +391,26 @@ def save_state(db, state):
         existing = db.execute('SELECT order_id FROM ORDERS WHERE order_code=?',(o['id'],)).fetchone()
         if existing:
             oid = existing[0]
-            db.execute('UPDATE ORDERS SET customer_id=?,owner_key=?,order_status=? WHERE order_id=?',(customer_id(db,o['owner']),o['owner'],o['status'],oid))
-            db.execute('UPDATE SHIPMENT SET shipping_status=? WHERE order_id=?',(o['status'],oid))
-            if o['status']=='취소': db.execute("UPDATE PAYMENT SET payment_status='취소' WHERE order_id=?",(oid,))
+
+            # 기존 주문의 소유자 정보만 동기화
+            # 주문·결제·배송 상태는 전용 SQL 함수에서 관리
+            db.execute(
+                """
+                UPDATE ORDERS
+                SET customer_id = ?, owner_key = ?
+                WHERE order_id = ?
+                """,
+                (
+                    customer_id(db, o['owner']),
+                    o['owner'],
+                    oid
+                )
+            )
             continue
-        oid = db.execute('INSERT INTO ORDERS(order_code,customer_id,owner_key,order_date,subtotal,shipping_fee,total_amount,order_status) VALUES (?,?,?,?,?,?,?,?)',(o['id'],customer_id(db,o['owner']),o['owner'],o['createdAt'],o['subtotal'],o['shippingFee'],o['total'],o['status'])).lastrowid
-        for i in o['items']:
-            db.execute('INSERT INTO ORDER_ITEM(order_id,product_id,original_product_id,product_name,image,quantity,unit_price) VALUES (?,?,?,?,?,?,?)',(oid,i['productId'] if i['productId'] in ids else None,i['productId'],i['name'],i['image'],i['quantity'],i['price']))
-        db.execute('INSERT INTO PAYMENT(order_id,payment_method,payment_status,payment_date) VALUES (?,?,?,?)',(oid,o['payment'],'취소' if o['status']=='취소' else '데모 완료',o['createdAt']))
-        sh = o['shipping']
-        db.execute('INSERT INTO SHIPMENT(order_id,shipping_address,shipping_status,recipient,phone,postal_code,address_detail,memo) VALUES (?,?,?,?,?,?,?,?)',(oid,sh['address'],o['status'],sh['recipient'],sh['phone'],sh['postalCode'],sh['addressDetail'],sh['memo']))
+        # 신규 주문은 create_order()에서만 생성
+        raise ValueError(
+            "save_state()에서는 신규 주문을 생성할 수 없습니다."
+        )
 
 def initialize(path):
     with connect(path) as db:
@@ -362,3 +436,139 @@ def initialize(path):
         if db.execute('PRAGMA foreign_key_check').fetchall(): raise ValueError('Foreign key validation failed')
         if legacy: db.execute('DROP TABLE state')
         db.execute('PRAGMA user_version=1')
+    
+
+def register_shipment(db, order_code, shipping):
+    """결제가 완료된 주문에 배송 정보를 등록한다."""
+
+    order = db.execute(
+        """
+        SELECT o.order_id, o.order_status, p.payment_status
+        FROM ORDERS o
+        LEFT JOIN PAYMENT p ON o.order_id = p.order_id
+        WHERE o.order_code = ?
+        """,
+        (order_code,)
+    ).fetchone()
+
+    if order is None:
+        raise ValueError("존재하지 않는 주문입니다.")
+
+    if order["order_status"] != "주문접수":
+        raise ValueError("배송 등록이 가능한 주문 상태가 아닙니다.")
+
+    if order["payment_status"] != "완료":
+        raise ValueError("결제가 완료된 주문만 배송 등록이 가능합니다.")
+
+    existing = db.execute(
+        "SELECT 1 FROM SHIPMENT WHERE order_id = ?",
+        (order["order_id"],)
+    ).fetchone()
+
+    if existing is not None:
+        raise ValueError("이미 배송 정보가 등록된 주문입니다.")
+
+    required = ["recipient", "phone", "postalCode", "address"]
+
+    for field in required:
+        value = shipping.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field} 항목을 입력해 주세요.")
+
+    if not isinstance(shipping.get("addressDetail", ""), str):
+        raise ValueError("상세 주소 형식이 올바르지 않습니다.")
+
+    if not isinstance(shipping.get("memo", ""), str):
+        raise ValueError("배송 메모 형식이 올바르지 않습니다.")
+
+    db.execute(
+        """
+        INSERT INTO SHIPMENT (
+            order_id,
+            shipping_address,
+            shipping_status,
+            recipient,
+            phone,
+            postal_code,
+            address_detail,
+            memo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            order["order_id"],
+            shipping["address"],
+            "배송준비",
+            shipping["recipient"],
+            shipping["phone"],
+            shipping["postalCode"],
+            shipping.get("addressDetail", ""),
+            shipping.get("memo", "")
+        )
+    )
+
+    db.execute(
+        """
+        UPDATE ORDERS
+        SET order_status = '처리중'
+        WHERE order_id = ?
+        """,
+        (order["order_id"],)
+    )
+
+    return "배송준비"
+
+
+def update_shipping_status(db, order_code, new_status):
+    """배송 상태를 변경하고 배송 완료 시 주문도 완료 처리한다."""
+
+    order = db.execute(
+        """
+        SELECT o.order_id, o.order_status,
+               s.shipping_status
+        FROM ORDERS o
+        JOIN SHIPMENT s ON o.order_id = s.order_id
+        WHERE o.order_code = ?
+        """,
+        (order_code,)
+    ).fetchone()
+
+    if order is None:
+        raise ValueError("배송 정보가 등록되지 않은 주문입니다.")
+
+    if order["order_status"] == "취소":
+        raise ValueError("취소된 주문의 배송 상태는 변경할 수 없습니다.")
+
+    # 허용되는 상태 변경
+    transitions = {
+        "배송준비": "배송중",
+        "배송중": "배송완료"
+    }
+
+    current = order["shipping_status"]
+
+    if transitions.get(current) != new_status:
+        raise ValueError("허용되지 않는 배송 상태 변경입니다.")
+
+    db.execute(
+        """
+        UPDATE SHIPMENT
+        SET shipping_status = ?
+        WHERE order_id = ?
+        """,
+        (new_status, order["order_id"])
+    )
+
+    # 배송 완료 시 주문 상태도 완료로 변경
+    if new_status == "배송완료":
+        db.execute(
+            """
+            UPDATE ORDERS
+            SET order_status = '완료'
+            WHERE order_id = ?
+            """,
+            (order["order_id"],)
+        )
+
+    return new_status
+

@@ -6,7 +6,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 from database import (
     connect, initialize, load_state, save_state,
-    create_order, cancel_order
+    create_order, cancel_order, process_payment, register_shipment, update_shipping_status
 )
 
 BASE = Path(__file__).resolve().parent
@@ -166,7 +166,11 @@ def logout():
     session.clear(); owner()
     return jsonify(user=None)
 @app.get('/api/shop')
-def shop(): return transact(lambda s: None)
+def shop():
+    with connect(DB) as db:
+        state = load_state(db)
+
+    return jsonify(**visible(state))
 @app.get('/api/products')
 def products():
     with connect(DB) as db: return jsonify(load_state(db)['products'])
@@ -260,29 +264,142 @@ def order():
 
     except ValueError as e:
         abort(409, str(e))
+
+@app.post('/api/orders/<order_code>/payment')
+def pay_order(order_code):
+    data = body()
+
+    # success는 반드시 boolean이어야 함
+    success = data.get('success', True)
+    payment_method = data.get('paymentMethod', '카드')
+
+    if type(success) is not bool:
+        abort(400, '결제 결과는 true 또는 false여야 합니다.')
+
+    # 로그인 고객 또는 비회원 세션의 주문 소유자 확인
+    with connect(DB) as db:
+        order = db.execute(
+            """
+            SELECT order_id, owner_key
+            FROM ORDERS
+            WHERE order_code = ?
+            """,
+            (order_code,)
+        ).fetchone()
+
+        if order is None:
+            abort(404, '존재하지 않는 주문입니다.')
+
+        if order['owner_key'] != owner() and not is_admin():
+            abort(403, '해당 주문에 접근할 권한이 없습니다.')
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            # SQL 트랜잭션 내부에서 결제 처리
+            payment_status = process_payment(
+                db,
+                order_code=order_code,
+                success=success,
+                payment_method=payment_method
+            )
+
+        # 결제 저장이 완료된 이후 최신 정보 조회
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            paymentStatus=payment_status
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+@app.post('/api/orders/<order_code>/shipment')
+def create_shipment(order_code):
+    admin()
+
+    shipping = body()
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            shipping_status = register_shipment(
+                db,
+                order_code=order_code,
+                shipping=shipping
+            )
+
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            shippingStatus=shipping_status
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+
+@app.patch('/api/orders/<order_code>/shipment')
+def change_shipping_status(order_code):
+    # 배송 상태 변경은 관리자만 가능
+    admin()
+
+    data = body()
+    new_status = data.get('status')
+
+    if new_status not in ('배송중', '배송완료'):
+        abort(400, '변경할 배송 상태가 올바르지 않습니다.')
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            shipping_status = update_shipping_status(
+                db,
+                order_code=order_code,
+                new_status=new_status
+            )
+
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            shippingStatus=shipping_status
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+
 @app.patch('/api/orders/<oid>')
 def status(oid):
     admin()
+
     target = body().get('status')
 
-    # 주문 취소는 SQL 트랜잭션으로 직접 처리
-    if target == '취소':
-        try:
-            with connect(DB) as db:
-                db.execute('BEGIN IMMEDIATE')
-                cancel_order(
-                    db,
-                    order_code=oid,
-                    warehouse_id=1
-                )
+    # 주문 취소는 별도의 SQL 트랜잭션으로 처리
+    if target != '취소':
+        abort(
+            409,
+            '주문 진행 상태는 배송 등록 및 배송 상태 API에서 관리합니다.'
+        )
 
-            with connect(DB) as db:
-                state = load_state(db)
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+            cancel_order(db, order_code=oid)
 
-            return jsonify(**visible(state))
+        with connect(DB) as db:
+            state = load_state(db)
 
-        except ValueError as e:
-            abort(409, str(e))
+        return jsonify(**visible(state))
+
+    except ValueError as e:
+        abort(409, str(e))
 
     # 나머지 상태 변경은 기존 방식 유지
     def change(s):

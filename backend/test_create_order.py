@@ -163,7 +163,7 @@ with TemporaryDirectory() as temp:
     try:
         with connect(db_path) as db:
             db.execute("BEGIN IMMEDIATE")
-            cancel_order(db, order_code, warehouse_id=1)
+            cancel_order(db, order_code)
         raise AssertionError("이미 취소한 주문을 다시 취소했습니다.")
 
     except ValueError as e:
