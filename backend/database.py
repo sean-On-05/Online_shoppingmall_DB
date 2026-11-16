@@ -18,6 +18,231 @@ def connect(path):
     finally:
         db.close()
 
+def deduct_inventory(db, product_id, warehouse_id, quantity):
+    """지정된 창고의 재고를 확인하고 차감한다."""
+    if type(quantity) is not int or quantity <= 0:
+        raise ValueError("주문 수량은 1개 이상이어야 합니다.")
+
+    cursor = db.execute(
+        """
+        UPDATE INVENTORY
+        SET quantity = quantity - ?
+        WHERE product_id = ?
+          AND warehouse_id = ?
+          AND quantity >= ?
+        """,
+        (quantity, product_id, warehouse_id, quantity)
+    )
+
+    if cursor.rowcount != 1:
+        raise ValueError("재고가 부족하거나 상품 재고가 존재하지 않습니다.")
+    
+
+def restore_inventory(db, product_id, warehouse_id, quantity):
+    """주문 취소 시 원래 창고의 재고를 복구한다."""
+
+    if type(quantity) is not int or quantity <= 0:
+        raise ValueError("복구 수량은 1개 이상이어야 합니다.")
+
+    cursor = db.execute(
+        """
+        UPDATE INVENTORY
+        SET quantity = quantity + ?
+        WHERE product_id = ?
+          AND warehouse_id = ?
+        """,
+        (quantity, product_id, warehouse_id)
+    )
+
+    if cursor.rowcount != 1:
+        raise ValueError("복구할 상품 또는 창고 재고가 존재하지 않습니다.")
+
+
+def cancel_order(db, order_code, warehouse_id=1):
+    """주문 취소, 재고 복구, 모의 결제 취소."""
+
+    # 1. 주문 조회
+    order = db.execute(
+        """
+        SELECT order_id, order_status
+        FROM ORDERS
+        WHERE order_code = ?
+        """,
+        (order_code,)
+    ).fetchone()
+
+    if order is None:
+        raise ValueError("존재하지 않는 주문입니다.")
+
+    order_id = order["order_id"]
+
+    # 2. 취소 가능 상태 확인
+    if order["order_status"] != "주문접수":
+        raise ValueError("주문 접수 상태에서만 취소할 수 있습니다.")
+
+    # 3. 배송 정보 등록 여부 확인
+    shipment = db.execute(
+        "SELECT 1 FROM SHIPMENT WHERE order_id = ?",
+        (order_id,)
+    ).fetchone()
+
+    if shipment is not None:
+        raise ValueError("배송 정보가 등록된 주문은 취소할 수 없습니다.")
+
+    # 4. 주문 상품 조회
+    items = db.execute(
+        """
+        SELECT product_id, quantity
+        FROM ORDER_ITEM
+        WHERE order_id = ?
+        """,
+        (order_id,)
+    ).fetchall()
+
+    if not items:
+        raise ValueError("주문 상품 정보가 없습니다.")
+
+    # 5. 재고 복구
+    for item in items:
+        if item["product_id"] is None:
+            raise ValueError("원래 상품을 찾을 수 없습니다.")
+
+        restore_inventory(
+            db,
+            item["product_id"],
+            warehouse_id,
+            item["quantity"]
+        )
+
+    # 6. 주문 상태 변경
+    db.execute(
+        """
+        UPDATE ORDERS
+        SET order_status = '취소'
+        WHERE order_id = ?
+        """,
+        (order_id,)
+    )
+
+    # 7. 결제 정보가 있다면 함께 취소
+    db.execute(
+        """
+        UPDATE PAYMENT
+        SET payment_status = '취소'
+        WHERE order_id = ?
+        """,
+        (order_id,)
+    )
+
+    return order_code
+
+
+def create_order(db, owner_key, warehouse_id=1):
+    """장바구니를 기준으로 주문 생성 및 재고 차감."""
+
+    import uuid
+    from datetime import datetime, timezone
+
+    cart = db.execute(
+        "SELECT cart_id FROM CART WHERE owner_key = ?",
+        (owner_key,)
+    ).fetchone()
+
+    if cart is None:
+        raise ValueError("장바구니가 존재하지 않습니다.")
+
+    items = db.execute(
+        """
+        SELECT ci.product_id, ci.quantity,
+               p.product_name, p.price, p.image, p.status
+        FROM CART_ITEM ci
+        JOIN PRODUCT p ON ci.product_id = p.product_id
+        WHERE ci.cart_id = ?
+        """,
+        (cart["cart_id"],)
+    ).fetchall()
+
+    if not items:
+        raise ValueError("장바구니가 비어 있습니다.")
+
+    subtotal = 0
+
+    for item in items:
+        if item["status"] != "판매중":
+            raise ValueError("판매 중지된 상품이 포함되어 있습니다.")
+
+        subtotal += item["price"] * item["quantity"]
+
+    shipping_fee = 0 if subtotal >= 50000 else 3000
+    order_code = "SSU-" + uuid.uuid4().hex.upper()
+
+    customer = db.execute(
+        "SELECT customer_id FROM CUSTOMER WHERE username = ?",
+        (owner_key,)
+    ).fetchone()
+
+    customer_id_value = customer["customer_id"] if customer else None
+
+    # 실제 SQL 재고 차감
+    for item in items:
+        deduct_inventory(
+            db,
+            item["product_id"],
+            warehouse_id,
+            item["quantity"]
+        )
+
+    cursor = db.execute(
+        """
+        INSERT INTO ORDERS (
+            order_code, customer_id, owner_key,
+            order_date, subtotal, shipping_fee,
+            total_amount, order_status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            order_code,
+            customer_id_value,
+            owner_key,
+            datetime.now(timezone.utc).isoformat(),
+            subtotal,
+            shipping_fee,
+            subtotal + shipping_fee,
+            "주문접수"
+        )
+    )
+
+    order_id = cursor.lastrowid
+
+    for item in items:
+        db.execute(
+            """
+            INSERT INTO ORDER_ITEM (
+                order_id, product_id, original_product_id,
+                product_name, image, quantity, unit_price
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order_id,
+                item["product_id"],
+                item["product_id"],
+                item["product_name"],
+                item["image"],
+                item["quantity"],
+                item["price"]
+            )
+        )
+
+    db.execute(
+        "DELETE FROM CART_ITEM WHERE cart_id = ?",
+        (cart["cart_id"],)
+    )
+
+    return order_code
+
+
 def customer_id(db, key):
     row = db.execute('SELECT customer_id FROM CUSTOMER WHERE username=?', (key,)).fetchone()
     return row[0] if row else None
@@ -44,7 +269,29 @@ def load_state(db):
         shipping = db.execute('SELECT * FROM SHIPMENT WHERE order_id=?', (r['order_id'],)).fetchone()
         payment = db.execute('SELECT * FROM PAYMENT WHERE order_id=?', (r['order_id'],)).fetchone()
         items = [dict(productId=i['original_product_id'], name=i['product_name'], image=i['image'], quantity=i['quantity'], price=i['unit_price']) for i in db.execute('SELECT * FROM ORDER_ITEM WHERE order_id=? ORDER BY order_item_id', (r['order_id'],))]
-        orders.append(dict(id=r['order_code'], owner=r['owner_key'], createdAt=r['order_date'], subtotal=r['subtotal'], shippingFee=r['shipping_fee'], total=r['total_amount'], status=r['order_status'], payment=payment['payment_method'], items=items, shipping=dict(recipient=shipping['recipient'], phone=shipping['phone'], postalCode=shipping['postal_code'], address=shipping['shipping_address'], addressDetail=shipping['address_detail'], memo=shipping['memo'])))
+        
+        orders.append(dict(
+            id=r['order_code'],
+            owner=r['owner_key'],
+            createdAt=r['order_date'],
+            subtotal=r['subtotal'],
+            shippingFee=r['shipping_fee'],
+            total=r['total_amount'],
+            status=r['order_status'],
+            payment=payment['payment_method'] if payment else None,
+            paymentStatus=payment['payment_status'] if payment else '대기',
+            items=items,
+            shipping=dict(
+                recipient=shipping['recipient'] if shipping else '',
+                phone=shipping['phone'] if shipping else '',
+                postalCode=shipping['postal_code'] if shipping else '',
+                address=shipping['shipping_address'] if shipping else '',
+                addressDetail=shipping['address_detail'] if shipping else '',
+                memo=shipping['memo'] if shipping else ''
+            ),
+            shippingStatus=shipping['shipping_status'] if shipping else None
+        ))
+
     return dict(products=products, carts=carts, orders=orders)
 
 def save_state(db, state):
