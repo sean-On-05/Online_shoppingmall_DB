@@ -252,8 +252,10 @@ def order():
             order_code = create_order(
                 db,
                 owner_key=owner(),
-                warehouse_id=1
+                warehouse_id=1,
+                shipping=shipping
             )
+
 
             state = load_state(db)
 

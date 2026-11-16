@@ -62,6 +62,34 @@ with TemporaryDirectory() as temp:
 
     order_code = response.get_json()["orderId"]
     print("1. 주문 생성 API 통과")
+    
+    
+    # 주문 직후 배송 정보 저장 확인
+    with connect(db_path) as db:
+        saved = db.execute(
+            """
+            SELECT s.recipient, s.phone,
+                   s.postal_code, s.shipping_address,
+                   s.address_detail, s.memo,
+                   s.shipping_status
+            FROM SHIPMENT s
+            JOIN ORDERS o ON s.order_id = o.order_id
+            WHERE o.order_code = ?
+            """,
+            (order_code,)
+        ).fetchone()
+
+        assert saved is not None
+        assert saved["recipient"] == shipping["recipient"]
+        assert saved["phone"] == shipping["phone"]
+        assert saved["postal_code"] == shipping["postalCode"]
+        assert saved["shipping_address"] == shipping["address"]
+        assert saved["address_detail"] == shipping["addressDetail"]
+        assert saved["memo"] == shipping["memo"]
+        assert saved["shipping_status"] is None
+
+    print("1-1. 주문 시 배송 정보 DB 저장 통과")
+
 
     # 2. 결제 API
     response = client.post(

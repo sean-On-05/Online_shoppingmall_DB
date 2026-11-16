@@ -83,8 +83,11 @@ CREATE TABLE IF NOT EXISTS SHIPMENT (
  order_id INTEGER NOT NULL UNIQUE REFERENCES ORDERS(order_id) ON DELETE CASCADE,
  tracking_number TEXT,
  shipping_address TEXT NOT NULL,
- shipping_status TEXT NOT NULL DEFAULT '배송준비'
-  CHECK(shipping_status IN ('배송준비','배송중','배송완료')),
+ shipping_status TEXT DEFAULT NULL
+  CHECK (
+    shipping_status IS NULL
+    OR shipping_status IN ('배송준비', '배송중', '배송완료')
+  ),
  recipient TEXT NOT NULL,
  phone TEXT NOT NULL,
  postal_code TEXT NOT NULL,

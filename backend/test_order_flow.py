@@ -47,12 +47,24 @@ with TemporaryDirectory() as temp:
             "INSERT INTO CART_ITEM VALUES (?, ?, ?)",
             (cart.lastrowid, product_id, 2)
         )
+        
+    shipping = {
+            "recipient": "테스트 고객",
+            "phone": "01012345678",
+            "postalCode": "06978",
+            "address": "서울특별시 동작구",
+            "addressDetail": "101호",
+            "memo": "문 앞에 놓아주세요"
+    }
 
     # 2. 주문 생성
     with connect(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         order_code = create_order(
-            db, owner_key, warehouse_id=1
+            db,
+            owner_key,
+            warehouse_id=1,
+            shipping=shipping
         )
 
     with connect(db_path) as db:
@@ -84,21 +96,33 @@ with TemporaryDirectory() as temp:
 
     print("2. 모의 결제 완료 통과")
 
-    # 4. 배송 등록
-    shipping = {
-        "recipient": "테스트 고객",
-        "phone": "01012345678",
-        "postalCode": "06978",
-        "address": "서울특별시 동작구",
-        "addressDetail": "101호",
-        "memo": "문 앞에 놓아주세요"
-    }
 
     with connect(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         register_shipment(db, order_code, shipping)
 
     print("3. 배송 정보 등록 통과")
+    
+    
+    # 관리자 배송 등록 후 기존 배송 정보가 유지되는지 확인
+    with connect(db_path) as db:
+        saved = db.execute(
+            """
+            SELECT s.recipient, s.shipping_address,
+                   s.shipping_status
+            FROM SHIPMENT s
+            JOIN ORDERS o ON s.order_id = o.order_id
+            WHERE o.order_code = ?
+            """,
+            (order_code,)
+        ).fetchone()
+
+        assert saved["recipient"] == shipping["recipient"]
+        assert saved["shipping_address"] == shipping["address"]
+        assert saved["shipping_status"] == "배송준비"
+
+    print("3-1. 배송 정보 유지 확인 통과")
+
 
     # 5. 배송 상태 변경
     with connect(db_path) as db:

@@ -16,6 +16,15 @@ with TemporaryDirectory() as temp:
     initialize(db_path)
 
     owner_key = "cancel-test-user"
+    
+    shipping = {
+        "recipient": "테스트 고객",
+        "phone": "01012345678",
+        "postalCode": "06978",
+        "address": "서울특별시 동작구",
+        "addressDetail": "101호",
+        "memo": ""
+    }
 
     # 1. 상품 재고 및 장바구니 준비
     with connect(db_path) as db:
@@ -48,7 +57,9 @@ with TemporaryDirectory() as temp:
     # 2. 주문 생성 및 재고 차감
     with connect(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        order_code = create_order(db, owner_key, warehouse_id=1)
+        order_code = create_order(
+            db, owner_key, warehouse_id=1, shipping=shipping
+        )
 
     with connect(db_path) as db:
         stock = db.execute("""
@@ -91,6 +102,18 @@ with TemporaryDirectory() as temp:
         assert result["payment_status"] == "취소"
         assert result["warehouse_id"] == 1
         assert stock == 10
+        shipment_count = db.execute(
+            """
+            SELECT COUNT(*)
+            FROM SHIPMENT s
+            JOIN ORDERS o ON s.order_id = o.order_id
+            WHERE o.order_code = ?
+            """,
+            (order_code,)
+        ).fetchone()[0]
+
+        assert shipment_count == 0
+
 
     print("3. 주문·결제 취소 및 재고 복구 통과")
 

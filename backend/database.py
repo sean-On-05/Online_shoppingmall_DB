@@ -79,14 +79,22 @@ def cancel_order(db, order_code):
     if order["order_status"] != "주문접수":
         raise ValueError("주문 접수 상태에서만 취소할 수 있습니다.")
 
-    # 배송 정보가 등록된 주문은 취소 불가
+    
+    # 배송 정보가 저장되어 있어도 배송 시작 전이면 취소 가능
     shipment = db.execute(
-        "SELECT 1 FROM SHIPMENT WHERE order_id = ?",
+        """
+        SELECT shipment_id, shipping_status
+        FROM SHIPMENT
+        WHERE order_id = ?
+        """,
         (order_id,)
     ).fetchone()
 
-    if shipment:
-        raise ValueError("배송 정보가 등록된 주문은 취소할 수 없습니다.")
+    # 배송준비·배송중·배송완료 상태에서는 취소 불가
+    if shipment and shipment["shipping_status"] is not None:
+        raise ValueError(
+            "배송 처리가 시작된 주문은 취소할 수 없습니다."
+        )
 
     items = db.execute(
         """
@@ -99,6 +107,17 @@ def cancel_order(db, order_code):
 
     if not items:
         raise ValueError("주문 상품 정보가 없습니다.")
+
+    # 배송 처리가 시작되지 않은 주문의 배송 정보 삭제
+    if shipment:
+        db.execute(
+            """
+            DELETE FROM SHIPMENT
+            WHERE shipment_id = ?
+              AND shipping_status IS NULL
+            """,
+            (shipment["shipment_id"],)
+        )
 
     # 주문 당시 출고 창고에 재고 복구
     for item in items:
@@ -200,7 +219,7 @@ def process_payment(db, order_code, success=True, payment_method="카드"):
 
     return payment_status
 
-def create_order(db, owner_key, warehouse_id=1):
+def create_order(db, owner_key, warehouse_id=1, shipping=None):
     """장바구니를 기준으로 주문 생성 및 재고 차감."""
 
     import uuid
@@ -303,6 +322,34 @@ def create_order(db, owner_key, warehouse_id=1):
         "DELETE FROM CART_ITEM WHERE cart_id = ?",
         (cart["cart_id"],)
     )
+
+    # 고객이 입력한 배송 정보를 주문과 함께 저장
+    # 배송 상태 NULL은 아직 배송 처리가 시작되지 않았다는 의미
+    if shipping is not None:
+        db.execute(
+            """
+            INSERT INTO SHIPMENT (
+                order_id,
+                shipping_address,
+                shipping_status,
+                recipient,
+                phone,
+                postal_code,
+                address_detail,
+                memo
+            )
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+            """,
+            (
+                order_id,
+                shipping["address"],
+                shipping["recipient"],
+                shipping["phone"],
+                shipping["postalCode"],
+                shipping.get("addressDetail", ""),
+                shipping.get("memo", "")
+            )
+        )
 
     return order_code
 
@@ -438,8 +485,9 @@ def initialize(path):
         db.execute('PRAGMA user_version=1')
     
 
-def register_shipment(db, order_code, shipping):
-    """결제가 완료된 주문에 배송 정보를 등록한다."""
+
+def register_shipment(db, order_code, shipping=None):
+    """결제 완료 후 기존 배송 정보를 배송준비 상태로 변경한다."""
 
     order = db.execute(
         """
@@ -460,51 +508,31 @@ def register_shipment(db, order_code, shipping):
     if order["payment_status"] != "완료":
         raise ValueError("결제가 완료된 주문만 배송 등록이 가능합니다.")
 
-    existing = db.execute(
-        "SELECT 1 FROM SHIPMENT WHERE order_id = ?",
+    # 주문 생성 시 저장해 둔 배송 정보 확인
+    shipment = db.execute(
+        """
+        SELECT shipment_id, shipping_status
+        FROM SHIPMENT
+        WHERE order_id = ?
+        """,
         (order["order_id"],)
     ).fetchone()
 
-    if existing is not None:
-        raise ValueError("이미 배송 정보가 등록된 주문입니다.")
+    if shipment is None:
+        raise ValueError("주문에 저장된 배송 정보가 없습니다.")
 
-    required = ["recipient", "phone", "postalCode", "address"]
+    if shipment["shipping_status"] is not None:
+        raise ValueError("이미 배송 등록이 완료된 주문입니다.")
 
-    for field in required:
-        value = shipping.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"{field} 항목을 입력해 주세요.")
-
-    if not isinstance(shipping.get("addressDetail", ""), str):
-        raise ValueError("상세 주소 형식이 올바르지 않습니다.")
-
-    if not isinstance(shipping.get("memo", ""), str):
-        raise ValueError("배송 메모 형식이 올바르지 않습니다.")
-
+    # 배송 정보는 그대로 유지하고 상태만 변경
     db.execute(
         """
-        INSERT INTO SHIPMENT (
-            order_id,
-            shipping_address,
-            shipping_status,
-            recipient,
-            phone,
-            postal_code,
-            address_detail,
-            memo
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        UPDATE SHIPMENT
+        SET shipping_status = '배송준비'
+        WHERE shipment_id = ?
+          AND shipping_status IS NULL
         """,
-        (
-            order["order_id"],
-            shipping["address"],
-            "배송준비",
-            shipping["recipient"],
-            shipping["phone"],
-            shipping["postalCode"],
-            shipping.get("addressDetail", ""),
-            shipping.get("memo", "")
-        )
+        (shipment["shipment_id"],)
     )
 
     db.execute(
@@ -517,6 +545,7 @@ def register_shipment(db, order_code, shipping):
     )
 
     return "배송준비"
+
 
 
 def update_shipping_status(db, order_code, new_status):
