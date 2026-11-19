@@ -3,12 +3,12 @@ import type { FormEvent } from "react";
 import { Modal, ModalBody, ModalHeader } from "flowbite-react";
 import { categories, money, productImage, type Product } from "../data";
 import {
-  nextStatuses,
   orderStatuses,
   type Order,
   type OrderStatus,
 } from "../domain";
 import OrderDetail, { orderDate } from "../components/OrderDetail";
+
 interface Props {
   products: Product[];
   orders: Order[];
@@ -18,6 +18,7 @@ interface Props {
   onStatus: (id: string, status: OrderStatus) => Promise<string | null>;
   onLogout: () => void;
 }
+
 export default function Admin({
   products,
   orders,
@@ -42,7 +43,9 @@ export default function Admin({
   } | null>(null);
   const [stockDrafts, setStockDrafts] = useState<Record<number, string>>({});
   const [stockMessage, setStockMessage] = useState("");
+
   const activeOrder = orders.find((o) => o.id === selectedOrder);
+
   const filteredProducts = products.filter(
     (p) =>
       p.name.toLowerCase().includes(query.toLowerCase()) &&
@@ -50,6 +53,7 @@ export default function Admin({
         stockFilter === "all" ||
         (stockFilter === "out" ? p.stock === 0 : p.stock > 0 && p.stock <= 10)),
   );
+
   const filteredOrders = orders.filter(
     (o) =>
       (statusFilter === "all" || o.status === statusFilter) &&
@@ -57,6 +61,7 @@ export default function Admin({
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!editing) return;
@@ -76,6 +81,7 @@ export default function Admin({
     setError(result ?? "");
     if (!result) setEditing(null);
   }
+
   async function saveStock(product: Product) {
     const value = stockDrafts[product.id];
     if (value === undefined || !value.trim()) {
@@ -93,16 +99,19 @@ export default function Admin({
         return next;
       });
   }
+
   function edit(product: Product) {
     setError("");
     setEditing(product);
   }
+
   const title =
     tab === "inventory"
       ? "재고 현황"
       : tab === "orders"
         ? "주문 관리"
         : "상품 관리";
+
   return (
     <main className="inner-page admin-page container">
       <div className="admin-top">
@@ -140,7 +149,7 @@ export default function Admin({
           <h1>{title}</h1>
           <p className="page-description">
             {tab === "orders"
-              ? "고객 주문을 확인하고 배송 상태를 관리하세요."
+              ? "고객 주문·결제 상태와 배송 상태를 확인하고 관리하세요."
               : tab === "inventory"
                 ? "품절과 재고 부족 상품을 확인하고 수량을 조정하세요."
                 : "숭실 굿즈의 상품 정보와 판매 상태를 관리하세요."}
@@ -181,17 +190,17 @@ export default function Admin({
           <strong>
             {tab === "orders"
               ? orders.filter(
-                  (o) => o.status === "주문접수" || o.status === "배송준비",
+                  (o) => o.status === "주문접수" || o.status === "처리중",
                 ).length
               : products.filter((p) => p.stock > 0 && p.stock <= 10).length}
             <small>{tab === "orders" ? "건" : "종"}</small>
           </strong>
         </div>
         <div>
-          <span>{tab === "orders" ? "배송 완료" : "품절 상품"}</span>
+          <span>{tab === "orders" ? "주문 완료" : "품절 상품"}</span>
           <strong>
             {tab === "orders"
-              ? orders.filter((o) => o.status === "배송완료").length
+              ? orders.filter((o) => o.status === "완료").length
               : products.filter((p) => p.stock === 0).length}
             <small>{tab === "orders" ? "건" : "종"}</small>
           </strong>
@@ -248,56 +257,77 @@ export default function Admin({
                 <th>상품</th>
                 <th>수령인</th>
                 <th>주문 금액</th>
-                <th>상태</th>
+                <th>결제 · 배송 · 주문</th>
                 <th>관리</th>
               </tr>
             </thead>
             <tbody>
-              {filteredOrders.map((o) => (
-                <tr key={o.id}>
-                  <td>
-                    <button
-                      className="order-id"
-                      onClick={() => setSelectedOrder(o.id)}
-                    >
-                      {o.id}
-                    </button>
-                    <small className="table-subtext">
-                      {orderDate(o.createdAt)}
-                    </small>
-                  </td>
-                  <td>
-                    {o.items[0]?.name}
-                    {o.items.length > 1 ? ` 외 ${o.items.length - 1}종` : ""}
-                  </td>
-                  <td>{o.shipping.recipient}</td>
-                  <td>{money(o.total)}</td>
-                  <td>
-                    <span
-                      className={`status-pill ${o.status === "취소" ? "soldout" : ""}`}
-                    >
-                      {o.status}
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      className="text-button"
-                      onClick={() => setSelectedOrder(o.id)}
-                    >
-                      상세
-                    </button>
-                    {nextStatuses(o.status).map((status) => (
+              {filteredOrders.map((o) => {
+                const canCancel =
+                  o.status === "주문접수" && o.shippingStatus === null;
+                return (
+                  <tr key={o.id}>
+                    <td>
                       <button
-                        key={status}
-                        className={`text-button ${status === "취소" ? "delete" : ""}`}
-                        onClick={() => setPendingStatus({ id: o.id, status })}
+                        className="order-id"
+                        onClick={() => setSelectedOrder(o.id)}
                       >
-                        {status === "취소" ? "주문 취소" : `${status} 처리`}
+                        {o.id}
                       </button>
-                    ))}
-                  </td>
-                </tr>
-              ))}
+                      <small className="table-subtext">
+                        {orderDate(o.createdAt)}
+                      </small>
+                    </td>
+                    <td>
+                      {o.items[0]?.name}
+                      {o.items.length > 1 ? ` 외 ${o.items.length - 1}종` : ""}
+                    </td>
+                    <td>{o.shipping.recipient}</td>
+                    <td>{money(o.total)}</td>
+                    <td>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        <span className="status-pill">결제: {o.paymentStatus}</span>
+                        <span className="status-pill">
+                          배송: {o.shippingStatus ?? "미등록"}
+                        </span>
+                        <span
+                          className={`status-pill ${o.status === "취소" ? "soldout" : ""}`}
+                        >
+                          주문: {o.status}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <button
+                        className="text-button"
+                        onClick={() => setSelectedOrder(o.id)}
+                      >
+                        상세
+                      </button>
+                      {o.paymentStatus === "완료" && o.shippingStatus === null && (
+                        <button
+                          className="text-button"
+                          onClick={() =>
+                            setPendingStatus({ id: o.id, status: "처리중" })
+                          }
+                        >
+                          배송 등록
+                        </button>
+                      )}
+                      {canCancel && (
+                        <button
+                          className="text-button delete"
+                          onClick={() =>
+                            setPendingStatus({ id: o.id, status: "취소" })
+                          }
+                        >
+                          주문 취소
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {!filteredOrders.length && (
@@ -307,7 +337,7 @@ export default function Admin({
                   ? "검색된 주문이 없습니다."
                   : "아직 접수된 주문이 없습니다."}
               </h2>
-              <p>고객용 화면에서 데모 주문을 완료하면 여기에 표시됩니다.</p>
+              <p>고객용 화면에서 주문을 완료하면 여기에 표시됩니다.</p>
             </div>
           )}
         </div>
@@ -380,7 +410,7 @@ export default function Admin({
                             setDeleting(p);
                           }}
                         >
-                          삭제
+                          판매 중지
                         </button>
                       </>
                     )}
@@ -395,9 +425,10 @@ export default function Admin({
         </div>
       )}
       <p className="admin-footnote">
-        Flask 서버에 저장되는 데모 관리 화면입니다. 주문접수 → 배송준비 → 배송중 →
-        배송완료 순서로 처리하며, 배송 전 취소 시 재고가 복원됩니다.
+        결제 완료 주문에 대해 배송 등록 후 배송준비 → 배송중 → 배송완료 순서로
+        진행하며, 배송 시작 전 취소 시 재고가 복원됩니다.
       </p>
+
       <Modal show={!!editing} onClose={() => setEditing(null)} size="lg">
         <ModalHeader>
           {products.some((p) => p.id === editing?.id)
@@ -510,12 +541,13 @@ export default function Admin({
           )}
         </ModalBody>
       </Modal>
+
       <Modal show={!!deleting} onClose={() => setDeleting(null)} size="md">
-        <ModalHeader>상품 삭제</ModalHeader>
+        <ModalHeader>판매 중지</ModalHeader>
         <ModalBody>
           <p>
-            ‘{deleting?.name}’ 상품을 삭제하시겠어요? 장바구니에서도 제거되며,
-            기존 주문 기록은 유지됩니다.
+            ‘{deleting?.name}’ 상품을 판매 중지 처리하시겠어요? 기존 주문
+            기록은 유지됩니다.
           </p>
           {error && (
             <p className="form-error" role="alert">
@@ -524,12 +556,14 @@ export default function Admin({
           )}
           <div className="dialog-actions">
             <button
+              type="button"
               className="secondary-button"
               onClick={() => setDeleting(null)}
             >
               취소
             </button>
             <button
+              type="button"
               className="danger-button"
               onClick={async () => {
                 if (!deleting) return;
@@ -538,11 +572,12 @@ export default function Admin({
                 if (!result) setDeleting(null);
               }}
             >
-              삭제하기
+              판매 중지하기
             </button>
           </div>
         </ModalBody>
       </Modal>
+
       <Modal
         show={!!activeOrder}
         onClose={() => setSelectedOrder(null)}
@@ -550,9 +585,15 @@ export default function Admin({
       >
         <ModalHeader>주문 상세</ModalHeader>
         <ModalBody>
-          {activeOrder && <OrderDetail order={activeOrder} />}
+          {activeOrder && (
+            <OrderDetail
+              order={activeOrder}
+              onClose={() => setSelectedOrder(null)}
+            />
+          )}
         </ModalBody>
       </Modal>
+
       <Modal
         show={!!pendingStatus}
         onClose={() => setPendingStatus(null)}
@@ -563,23 +604,24 @@ export default function Admin({
           <p>주문을 ‘{pendingStatus?.status}’ 상태로 변경하시겠어요?</p>
           {pendingStatus?.status === "취소" && (
             <p className="field-help">
-              취소하면 주문 상품의 재고가 복원됩니다. 취소한 주문은 되돌릴 수
-              없습니다.
+              취소하면 주문 상품의 재고가 복원됩니다.
             </p>
           )}
           <div className="dialog-actions">
             <button
+              type="button"
               className="secondary-button"
               onClick={() => setPendingStatus(null)}
             >
               닫기
             </button>
             <button
+              type="button"
               className="primary-button"
               onClick={async () => {
-                if (pendingStatus)
-                  if (await onStatus(pendingStatus.id, pendingStatus.status)) return;
-                setPendingStatus(null);
+                if (!pendingStatus) return;
+                const err = await onStatus(pendingStatus.id, pendingStatus.status);
+                if (!err) setPendingStatus(null);
               }}
             >
               변경하기

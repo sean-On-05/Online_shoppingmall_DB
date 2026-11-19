@@ -12,9 +12,10 @@ import MyPage from "./pages/MyPage";
 import ProductDetail from "./pages/ProductDetail";
 import Checkout from "./pages/Checkout";
 import Orders from "./pages/Orders";
-import type { ShopState, ShippingInfo } from "./domain";
+import type { ShopState, ShippingInfo, OrderStatus } from "./domain";
 import { canManageShop, loginDestination, type SessionUser } from "./auth";
 import { api } from "./api";
+
 export default function App() {
   const [hash, setHash] = useState(location.hash);
   const [shop, setShop] = useState<ShopState>({ products: [], items: [], orders: [] });
@@ -25,6 +26,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState("");
   const busy = useRef(false);
+
   const path = hash.split("?")[0].replace(/^#/, "") || "/";
   const isAdmin = path === "/admin" || path.startsWith("/admin/");
   const page: Page = isAdmin
@@ -36,6 +38,7 @@ export default function App() {
         : "other";
   const collection =
     new URLSearchParams(hash.split("?")[1]).get("collection") ?? "";
+
   useEffect(() => {
     const change = () => {
       setHash(location.hash);
@@ -46,11 +49,13 @@ export default function App() {
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
   }, []);
+
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(timer);
   }, [toast]);
+
   useEffect(() => {
     async function load() {
       try {
@@ -58,10 +63,13 @@ export default function App() {
         setUser(session.user);
         setShop(await api<ShopState>("/shop"));
         setReady(true);
-      } catch (e) { setLoadError(e instanceof Error ? e.message : "서버 연결 실패"); }
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : "서버 연결 실패");
+      }
     }
     void load();
   }, []);
+
   async function perform(url: string, method: string, data?: unknown, message = "") {
     if (busy.current) return "이전 요청을 처리 중입니다.";
     busy.current = true;
@@ -72,40 +80,72 @@ export default function App() {
       if (result.orderId) location.hash = `#/orders/${result.orderId}?complete=1`;
       return null;
     } catch (e) {
-      const message = e instanceof Error ? e.message : "요청 실패";
-      setToast(message); return message;
-    } finally { busy.current = false; }
+      const msg = e instanceof Error ? e.message : "요청 실패";
+      setToast(msg);
+      return msg;
+    } finally {
+      busy.current = false;
+    }
   }
+
   function add(id: number, quantity = 1) {
     return perform(`/cart/items/${id}`, "PUT", { increment: quantity }, "장바구니에 담았어요.");
   }
+
   async function login(username: string, password: string) {
     try {
       const result = await api<ShopState & { user: SessionUser }>("/session", "POST", { username, password });
-      setUser(result.user); setShop(result);
+      setUser(result.user);
+      setShop(result);
       location.hash = `#${loginDestination(result.user, new URLSearchParams(hash.split("?")[1]).get("returnTo"))}`;
       return null;
-    } catch (e) { return e instanceof Error ? e.message : "로그인 실패"; }
+    } catch (e) {
+      return e instanceof Error ? e.message : "로그인 실패";
+    }
   }
+
   async function logout() {
     try {
       await api("/session", "DELETE");
-      setUser(null); setShop({products: [], items: [], orders: []});
+      setUser(null);
+      setShop({ products: [], items: [], orders: [] });
       location.hash = "#/";
       setShop(await api<ShopState>("/shop"));
       return true;
-    } catch (e) { setToast(e instanceof Error ? e.message : "로그아웃 실패"); return false; }
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "로그아웃 실패");
+      return false;
+    }
   }
+
   async function switchAccount() {
     if (await logout()) location.hash = `#/login?returnTo=${encodeURIComponent(path)}`;
   }
+
   function checkout(shipping: ShippingInfo) {
     return perform("/orders", "POST", shipping, "주문이 접수되었어요.");
   }
+
+  async function handleAdminOrderAction(id: string, status: OrderStatus) {
+    if (status === "취소") {
+      return perform(`/orders/${id}`, "PATCH", { status: "취소" }, "주문을 취소했어요.");
+    }
+    if (status === "배송중" || status === "배송완료") {
+      return perform(
+        `/orders/${id}/shipment`,
+        "PATCH",
+        { status },
+        `배송 상태를 '${status}'로 변경했어요.`,
+      );
+    }
+    return perform(`/orders/${id}/shipment`, "POST", {}, "배송을 등록했어요.");
+  }
+
   useEffect(() => {
     if (ready && isAdmin && !user)
       location.hash = `#/login?returnTo=${encodeURIComponent(path)}`;
   }, [ready, isAdmin, user, path]);
+
   let content;
   if (isAdmin)
     content = canManageShop(user) ? (
@@ -115,16 +155,17 @@ export default function App() {
         section={path.split("/")[2] ?? "products"}
         onLogout={logout}
         onSave={(p) =>
-          perform(shop.products.some(x => x.id === p.id) ? `/products/${p.id}` : "/products", shop.products.some(x => x.id === p.id) ? "PUT" : "POST", p, "상품을 저장했어요.")
-        }
-        onDelete={(id) =>
-          perform(`/products/${id}`, "DELETE", undefined, "상품을 삭제했어요.")
-        }
-        onStatus={(id, status) =>
           perform(
-            `/orders/${id}`, "PATCH", { status }, "주문 상태를 변경했어요.",
+            shop.products.some((x) => x.id === p.id) ? `/products/${p.id}` : "/products",
+            shop.products.some((x) => x.id === p.id) ? "PUT" : "POST",
+            p,
+            "상품을 저장했어요.",
           )
         }
+        onDelete={(id) =>
+          perform(`/products/${id}`, "DELETE", undefined, "상품 판매를 중지했어요.")
+        }
+        onStatus={handleAdminOrderAction}
       />
     ) : user ? (
       <main className="inner-page empty-state container">
@@ -146,7 +187,14 @@ export default function App() {
   else if (path === "/mypage")
     content = <MyPage key={user?.id ?? "guest"} user={user} />;
   else if (path === "/register")
-    content = user ? <main className="inner-page container"><h1>이미 로그인되어 있습니다.</h1><a href="#/">쇼핑 계속하기</a></main> : <Register />;
+    content = user ? (
+      <main className="inner-page container">
+        <h1>이미 로그인되어 있습니다.</h1>
+        <a href="#/">쇼핑 계속하기</a>
+      </main>
+    ) : (
+      <Register />
+    );
   else if (path === "/login")
     content = user ? (
       <main className="inner-page empty-state container">
@@ -230,6 +278,7 @@ export default function App() {
         </a>
       </main>
     );
+
   return (
     <>
       <Navbar
@@ -248,7 +297,14 @@ export default function App() {
           setQuery(value);
         }}
       />
-      {!ready ? <main className="inner-page container"><p role="status">{loadError || "서버에서 불러오는 중…"}</p>{loadError && <button onClick={() => location.reload()}>다시 시도</button>}</main> : content}
+      {!ready ? (
+        <main className="inner-page container">
+          <p role="status">{loadError || "서버에서 불러오는 중…"}</p>
+          {loadError && <button onClick={() => location.reload()}>다시 시도</button>}
+        </main>
+      ) : (
+        content
+      )}
       <Footer />
       {toast && (
         <div className="toast" role="status">

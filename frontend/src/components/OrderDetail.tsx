@@ -1,5 +1,6 @@
 import { money, productImage } from "../data";
 import type { Order } from "../domain";
+
 export const orderDate = (value: string) =>
   new Date(value).toLocaleString("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -9,7 +10,14 @@ export const orderDate = (value: string) =>
     hour: "2-digit",
     minute: "2-digit",
   });
-export default function OrderDetail({ order }: { order: Order }) {
+
+export default function OrderDetail({
+  order,
+  onClose,
+}: {
+  order: Order;
+  onClose?: () => void;
+}) {
   return (
     <div className="order-detail">
       <div className="order-meta">
@@ -17,15 +25,29 @@ export default function OrderDetail({ order }: { order: Order }) {
           <span className="field-help">주문번호</span>
           <strong>{order.id}</strong>
         </div>
-        <span
-          className={`status-pill ${order.status === "취소" ? "soldout" : ""}`}
-        >
-          {order.status}
-        </span>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <span
+            className={`status-pill ${order.status === "취소" ? "soldout" : ""}`}
+          >
+            주문: {order.status}
+          </span>
+          <span className="status-pill">결제: {order.paymentStatus}</span>
+          <span className="status-pill">
+            배송: {order.shippingStatus ?? "미등록"}
+          </span>
+          {onClose && (
+            <button type="button" onClick={onClose} aria-label="주문 상세 닫기">
+              닫기
+            </button>
+          )}
+        </div>
       </div>
+
       <p className="field-help">
-        {orderDate(order.createdAt)} · {order.payment}
+        {orderDate(order.createdAt)}
+        {order.payment ? ` · ${order.payment}` : ""}
       </p>
+
       <div className="order-lines">
         {order.items.map((i) => (
           <div className="checkout-product" key={i.productId}>
@@ -40,31 +62,36 @@ export default function OrderDetail({ order }: { order: Order }) {
           </div>
         ))}
       </div>
+
       <div className="order-info-grid">
         <section>
           <h3>배송 정보</h3>
           <dl className="detail-specs">
             <div>
               <dt>받는 분</dt>
-              <dd>{order.shipping.recipient}</dd>
+              <dd>{order.shipping?.recipient || "-"}</dd>
             </div>
             <div>
               <dt>연락처</dt>
-              <dd>{order.shipping.phone}</dd>
+              <dd>{order.shipping?.phone || "-"}</dd>
             </div>
             <div>
               <dt>주소</dt>
               <dd>
-                ({order.shipping.postalCode}) {order.shipping.address}{" "}
-                {order.shipping.addressDetail}
+                {order.shipping?.postalCode || order.shipping?.address
+                  ? `(${order.shipping?.postalCode ?? ""}) ${
+                      order.shipping?.address ?? ""
+                    } ${order.shipping?.addressDetail ?? ""}`.trim()
+                  : "-"}
               </dd>
             </div>
             <div>
               <dt>요청사항</dt>
-              <dd>{order.shipping.memo || "없음"}</dd>
+              <dd>{order.shipping?.memo || "없음"}</dd>
             </div>
           </dl>
         </section>
+
         <section>
           <h3>주문 금액</h3>
           <dl className="detail-specs">
@@ -85,10 +112,10 @@ export default function OrderDetail({ order }: { order: Order }) {
           </dl>
         </section>
       </div>
+
       {order.status === "취소" && (
         <p className="demo-note">
-          취소된 주문입니다. 상품 재고가 복원되었으며, 데모 주문이므로 실제
-          환불은 발생하지 않습니다.
+          취소된 주문입니다. 상품 재고가 복원되었습니다.
         </p>
       )}
     </div>
