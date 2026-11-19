@@ -7,6 +7,7 @@ export interface Product {
   image: string;
   label?: string;
   stock: number;
+  status?: "판매중" | "판매중지";
   description: string;
 }
 export interface CartItem {

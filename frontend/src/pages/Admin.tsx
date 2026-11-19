@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Modal, ModalBody, ModalHeader } from "flowbite-react";
 import { categories, money, productImage, type Product } from "../data";
 import {
-  nextStatuses,
+  orderActions,
   orderStatuses,
   type Order,
-  type OrderStatus,
+  type OrderAction,
 } from "../domain";
 import OrderDetail, { orderDate } from "../components/OrderDetail";
 interface Props {
@@ -15,7 +15,8 @@ interface Props {
   section: string;
   onSave: (product: Product) => Promise<string | null>;
   onDelete: (id: number) => Promise<string | null>;
-  onStatus: (id: string, status: OrderStatus) => Promise<string | null>;
+  onResume: (id: number) => Promise<string | null>;
+  onStatus: (id: string, status: OrderAction) => Promise<string | null>;
   onLogout: () => void;
 }
 export default function Admin({
@@ -24,6 +25,7 @@ export default function Admin({
   section,
   onSave,
   onDelete,
+  onResume,
   onStatus,
   onLogout,
 }: Props) {
@@ -31,6 +33,9 @@ export default function Admin({
     section === "inventory" || section === "orders" ? section : "products";
   const [editing, setEditing] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState<Product | null>(null);
+  const salePending = useRef(false);
+  const [saleBusy, setSaleBusy] = useState(false);
+  const resuming = deleting?.status === "판매중지";
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [stockFilter, setStockFilter] = useState("all");
@@ -38,8 +43,11 @@ export default function Admin({
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
   const [pendingStatus, setPendingStatus] = useState<{
     id: string;
-    status: OrderStatus;
+    status: OrderAction;
   } | null>(null);
+  const actionPending = useRef(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
   const [stockDrafts, setStockDrafts] = useState<Record<number, string>>({});
   const [stockMessage, setStockMessage] = useState("");
   const activeOrder = orders.find((o) => o.id === selectedOrder);
@@ -181,7 +189,8 @@ export default function Admin({
           <strong>
             {tab === "orders"
               ? orders.filter(
-                  (o) => o.status === "주문접수" || o.status === "배송준비",
+                  (o) =>
+                    o.status === "주문접수" || o.shippingStatus === "배송준비",
                 ).length
               : products.filter((p) => p.stock > 0 && p.stock <= 10).length}
             <small>{tab === "orders" ? "건" : "종"}</small>
@@ -191,7 +200,7 @@ export default function Admin({
           <span>{tab === "orders" ? "배송 완료" : "품절 상품"}</span>
           <strong>
             {tab === "orders"
-              ? orders.filter((o) => o.status === "배송완료").length
+              ? orders.filter((o) => o.shippingStatus === "배송완료").length
               : products.filter((p) => p.stock === 0).length}
             <small>{tab === "orders" ? "건" : "종"}</small>
           </strong>
@@ -248,7 +257,7 @@ export default function Admin({
                 <th>상품</th>
                 <th>수령인</th>
                 <th>주문 금액</th>
-                <th>상태</th>
+                <th>주문 · 결제 · 배송</th>
                 <th>관리</th>
               </tr>
             </thead>
@@ -276,8 +285,14 @@ export default function Admin({
                     <span
                       className={`status-pill ${o.status === "취소" ? "soldout" : ""}`}
                     >
-                      {o.status}
+                      주문 {o.status}
                     </span>
+                    <small className="table-subtext">
+                      결제 {o.paymentStatus}
+                    </small>
+                    <small className="table-subtext">
+                      배송 {o.shippingStatus ?? "미등록"}
+                    </small>
                   </td>
                   <td>
                     <button
@@ -286,13 +301,20 @@ export default function Admin({
                     >
                       상세
                     </button>
-                    {nextStatuses(o.status).map((status) => (
+                    {orderActions(o).map((status) => (
                       <button
                         key={status}
                         className={`text-button ${status === "취소" ? "delete" : ""}`}
-                        onClick={() => setPendingStatus({ id: o.id, status })}
+                        onClick={() => {
+                          setActionError("");
+                          setPendingStatus({ id: o.id, status });
+                        }}
                       >
-                        {status === "취소" ? "주문 취소" : `${status} 처리`}
+                        {status === "취소"
+                          ? "주문 취소"
+                          : status === "배송준비"
+                            ? "배송 등록"
+                            : `${status} 처리`}
                       </button>
                     ))}
                   </td>
@@ -335,6 +357,9 @@ export default function Admin({
                   <td>{p.category}</td>
                   <td>{money(p.price)}</td>
                   <td>
+                    <span className={`status-pill ${p.status === "판매중지" ? "soldout" : ""}`}>
+                      {p.status === "판매중지" ? "판매 중지 · 쇼핑몰 숨김" : "판매중"}
+                    </span>{" "}
                     <span
                       className={`status-pill ${p.stock === 0 ? "soldout" : p.stock <= 10 ? "low-stock" : ""}`}
                     >
@@ -374,13 +399,13 @@ export default function Admin({
                           수정
                         </button>
                         <button
-                          className="text-button delete"
+                          className={`text-button ${p.status === "판매중지" ? "" : "delete"}`}
                           onClick={() => {
                             setError("");
                             setDeleting(p);
                           }}
                         >
-                          삭제
+                          {p.status === "판매중지" ? "판매 재개" : "판매 중지"}
                         </button>
                       </>
                     )}
@@ -395,8 +420,8 @@ export default function Admin({
         </div>
       )}
       <p className="admin-footnote">
-        Flask 서버에 저장되는 데모 관리 화면입니다. 주문접수 → 배송준비 → 배송중 →
-        배송완료 순서로 처리하며, 배송 전 취소 시 재고가 복원됩니다.
+        Flask 서버에 저장되는 데모 관리 화면입니다. 주문접수 → 배송준비 → 배송중
+        → 배송완료 순서로 처리하며, 배송 전 취소 시 재고가 복원됩니다.
       </p>
       <Modal show={!!editing} onClose={() => setEditing(null)} size="lg">
         <ModalHeader>
@@ -510,12 +535,13 @@ export default function Admin({
           )}
         </ModalBody>
       </Modal>
-      <Modal show={!!deleting} onClose={() => setDeleting(null)} size="md">
-        <ModalHeader>상품 삭제</ModalHeader>
+      <Modal show={!!deleting} onClose={() => { if (!saleBusy) setDeleting(null); }} size="md">
+        <ModalHeader>{resuming ? "판매 재개" : "판매 중지"}</ModalHeader>
         <ModalBody>
           <p>
-            ‘{deleting?.name}’ 상품을 삭제하시겠어요? 장바구니에서도 제거되며,
-            기존 주문 기록은 유지됩니다.
+            {resuming
+              ? `‘${deleting?.name}’ 상품의 판매를 재개하시겠어요? 기존 재고 그대로 쇼핑몰에 다시 표시됩니다. 재고가 0이면 품절로 표시됩니다.`
+              : `‘${deleting?.name}’ 상품의 판매를 중지하시겠어요? 쇼핑몰에서 숨겨지고 장바구니에서 제거됩니다. 재고와 기존 주문 기록은 유지됩니다.`}
           </p>
           {error && (
             <p className="form-error" role="alert">
@@ -525,20 +551,32 @@ export default function Admin({
           <div className="dialog-actions">
             <button
               className="secondary-button"
+              disabled={saleBusy}
               onClick={() => setDeleting(null)}
             >
               취소
             </button>
             <button
-              className="danger-button"
+              className={resuming ? "primary-button" : "danger-button"}
+              disabled={saleBusy}
               onClick={async () => {
-                if (!deleting) return;
-                const result = await onDelete(deleting.id);
-                setError(result ?? "");
-                if (!result) setDeleting(null);
+                if (!deleting || salePending.current) return;
+                salePending.current = true;
+                setSaleBusy(true);
+                setError("");
+                try {
+                  const result = await (resuming ? onResume : onDelete)(deleting.id);
+                  setError(result ?? "");
+                  if (!result) setDeleting(null);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "판매 상태 변경에 실패했습니다.");
+                } finally {
+                  salePending.current = false;
+                  setSaleBusy(false);
+                }
               }}
             >
-              삭제하기
+              {saleBusy ? "처리 중…" : resuming ? "판매 재개하기" : "판매 중지하기"}
             </button>
           </div>
         </ModalBody>
@@ -555,12 +593,23 @@ export default function Admin({
       </Modal>
       <Modal
         show={!!pendingStatus}
-        onClose={() => setPendingStatus(null)}
+        onClose={() => {
+          if (!actionBusy) setPendingStatus(null);
+        }}
         size="md"
       >
         <ModalHeader>주문 상태 변경</ModalHeader>
         <ModalBody>
-          <p>주문을 ‘{pendingStatus?.status}’ 상태로 변경하시겠어요?</p>
+          <p>
+            {pendingStatus?.status === "배송준비"
+              ? "저장된 배송지로 배송을 등록하시겠어요?"
+              : `‘${pendingStatus?.status}’ 처리를 진행하시겠어요?`}
+          </p>
+          {actionError && (
+            <p className="form-error" role="alert">
+              {actionError}
+            </p>
+          )}
           {pendingStatus?.status === "취소" && (
             <p className="field-help">
               취소하면 주문 상품의 재고가 복원됩니다. 취소한 주문은 되돌릴 수
@@ -570,16 +619,30 @@ export default function Admin({
           <div className="dialog-actions">
             <button
               className="secondary-button"
+              disabled={actionBusy}
               onClick={() => setPendingStatus(null)}
             >
               닫기
             </button>
             <button
               className="primary-button"
+              disabled={actionBusy}
               onClick={async () => {
-                if (pendingStatus)
-                  if (await onStatus(pendingStatus.id, pendingStatus.status)) return;
-                setPendingStatus(null);
+                if (!pendingStatus || actionPending.current) return;
+                actionPending.current = true;
+                setActionBusy(true);
+                setActionError("");
+                try {
+                  const result = await onStatus(
+                    pendingStatus.id,
+                    pendingStatus.status,
+                  );
+                  if (result) setActionError(result);
+                  else setPendingStatus(null);
+                } finally {
+                  actionPending.current = false;
+                  setActionBusy(false);
+                }
               }}
             >
               변경하기

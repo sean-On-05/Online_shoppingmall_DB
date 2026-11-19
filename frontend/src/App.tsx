@@ -14,10 +14,12 @@ import Checkout from "./pages/Checkout";
 import Orders from "./pages/Orders";
 import type { ShopState, ShippingInfo } from "./domain";
 import { canManageShop, loginDestination, type SessionUser } from "./auth";
+import { orderActionRequest, paymentRequest } from "./orderRequests";
 import { api } from "./api";
 export default function App() {
   const [hash, setHash] = useState(location.hash);
   const [shop, setShop] = useState<ShopState>({ products: [], items: [], orders: [] });
+  const storefrontProducts = shop.products.filter(p => p.status !== "판매중지");
   const [user, setUser] = useState<SessionUser | null>(null);
   const [query, setQuery] = useState("");
   const pendingSearch = useRef<string | null>(null);
@@ -118,13 +120,15 @@ export default function App() {
           perform(shop.products.some(x => x.id === p.id) ? `/products/${p.id}` : "/products", shop.products.some(x => x.id === p.id) ? "PUT" : "POST", p, "상품을 저장했어요.")
         }
         onDelete={(id) =>
-          perform(`/products/${id}`, "DELETE", undefined, "상품을 삭제했어요.")
+          perform(`/products/${id}`, "DELETE", undefined, "상품 판매를 중지했어요.")
         }
-        onStatus={(id, status) =>
-          perform(
-            `/orders/${id}`, "PATCH", { status }, "주문 상태를 변경했어요.",
-          )
+        onResume={(id) =>
+          perform(`/products/${id}/resume`, "POST", {}, "상품 판매를 재개했어요.")
         }
+        onStatus={(id, status) => {
+          const request = orderActionRequest(id, status);
+          return perform(request.path, request.method, request.data, "주문 처리 결과를 반영했어요.");
+        }}
       />
     ) : user ? (
       <main className="inner-page empty-state container">
@@ -175,7 +179,7 @@ export default function App() {
   else if (path === "/")
     content = (
       <Home
-        products={shop.products}
+        products={storefrontProducts}
         query={query}
         collection={collection}
         onAdd={add}
@@ -184,7 +188,7 @@ export default function App() {
   else if (path === "/cart")
     content = (
       <Cart
-        products={shop.products}
+        products={storefrontProducts}
         items={shop.items}
         onQuantity={(id, quantity) =>
           perform(`/cart/items/${id}`, "PUT", { quantity })
@@ -195,7 +199,7 @@ export default function App() {
     content = (
       <ProductDetail
         key={path}
-        product={shop.products.find((p) => p.id === Number(path.split("/")[2]))}
+        product={storefrontProducts.find((p) => p.id === Number(path.split("/")[2]))}
         inCart={
           shop.items.find((i) => i.productId === Number(path.split("/")[2]))
             ?.quantity ?? 0
@@ -206,7 +210,7 @@ export default function App() {
   else if (path === "/checkout")
     content = (
       <Checkout
-        products={shop.products}
+        products={storefrontProducts}
         items={shop.items}
         onSubmit={checkout}
       />
@@ -214,6 +218,10 @@ export default function App() {
   else if (path === "/orders" || path.startsWith("/orders/"))
     content = (
       <Orders
+        onPayment={(id, success, method) => {
+          const request = paymentRequest(id, success, method);
+          return perform(request.path, request.method, request.data);
+        }}
         orders={shop.orders}
         orderId={path.split("/")[2]}
         complete={

@@ -1,3 +1,5 @@
+import PaymentPanel from "../components/PaymentPanel";
+import type { PaymentMethod } from "../domain";
 import { money } from "../data";
 import type { Order } from "../domain";
 import OrderDetail, { orderDate } from "../components/OrderDetail";
@@ -6,10 +8,16 @@ export default function Orders({
   orders,
   orderId,
   complete,
+  onPayment,
 }: {
   orders: Order[];
   orderId?: string;
   complete: boolean;
+  onPayment: (
+    id: string,
+    success: boolean,
+    method: PaymentMethod,
+  ) => Promise<string | null>;
 }) {
   const order = orders.find((o) => o.id === orderId);
   if (orderId && !order)
@@ -29,26 +37,27 @@ export default function Orders({
           <a className="breadcrumb" href="#/orders">
             ← 주문 내역으로
           </a>
-          {complete && (
+          {complete && order.status !== "취소" && (
             <div className="order-success">
               <span>
                 <Icon name="check" size={30} />
               </span>
               <span className="eyebrow">THANK YOU FOR YOUR ORDER</span>
-              <h1>숭실의 일상이 곧 함께할 거예요.</h1>
+              <h1>주문이 접수되었습니다.</h1>
               <p>
-                데모 주문이 접수되었습니다. 실제 결제와 배송은 진행되지
-                않습니다.
+                주문 접수와 결제는 별도입니다. 아래에서 결제 상태를 확인해
+                주세요.
               </p>
             </div>
           )}
-          {!complete && (
+          {(!complete || order.status === "취소") && (
             <>
               <span className="eyebrow">YOUR ORDER DETAILS</span>
               <h1>주문 상세</h1>
             </>
           )}
           <OrderDetail order={order} />
+          <PaymentPanel key={order.id} order={order} onPayment={onPayment} />
           <div className="center-actions">
             <a className="secondary-button" href="#/orders">
               주문 내역 보기
@@ -86,6 +95,9 @@ export default function Orders({
                     {o.items.length > 1 ? ` 외 ${o.items.length - 1}종` : ""}
                   </strong>
                   <p>{o.id}</p>
+                  <p>
+                    결제 {o.paymentStatus} · 배송 {o.shippingStatus ?? "미등록"}
+                  </p>
                   <div>
                     <b>{money(o.total)}</b>
                     <span>주문 상세 보기 →</span>

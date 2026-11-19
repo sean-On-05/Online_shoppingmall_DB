@@ -1,12 +1,30 @@
 import type { CartItem, Product } from "./data";
-export const orderStatuses = [
-  "주문접수",
-  "배송준비",
-  "배송중",
-  "배송완료",
-  "취소",
-] as const;
+export const orderStatuses = ["주문접수", "처리중", "완료", "취소"] as const;
 export type OrderStatus = (typeof orderStatuses)[number];
+export type PaymentStatus = "대기" | "완료" | "실패" | "취소";
+export type ShippingStatus = "배송준비" | "배송중" | "배송완료" | null;
+export const paymentMethods = ["카드", "계좌이체", "간편결제"] as const;
+export type PaymentMethod = (typeof paymentMethods)[number];
+export type OrderAction = "배송준비" | "배송중" | "배송완료" | "취소";
+export function canPay(order: Order) {
+  return (
+    order.status === "주문접수" &&
+    order.shippingStatus === null &&
+    (order.paymentStatus === "대기" || order.paymentStatus === "실패")
+  );
+}
+export function orderActions(order: Order): OrderAction[] {
+  if (order.status === "주문접수" && order.shippingStatus === null) {
+    return order.paymentStatus === "완료" && !!order.shipping?.address
+      ? ["배송준비", "취소"]
+      : ["취소"];
+  }
+  if (order.status === "처리중" && order.paymentStatus === "완료") {
+    if (order.shippingStatus === "배송준비") return ["배송중"];
+    if (order.shippingStatus === "배송중") return ["배송완료"];
+  }
+  return [];
+}
 export interface ShippingInfo {
   recipient: string;
   phone: string;
@@ -31,7 +49,9 @@ export interface Order {
   shippingFee: number;
   total: number;
   status: OrderStatus;
-  payment: "데모 결제";
+  payment: string | null;
+  paymentStatus: PaymentStatus;
+  shippingStatus: ShippingStatus;
 }
 export interface ShopState {
   products: Product[];
@@ -124,7 +144,9 @@ export function placeOrder(
     shippingFee: fee,
     total: subtotal + fee,
     status: "주문접수",
-    payment: "데모 결제",
+    payment: null,
+    paymentStatus: "대기",
+    shippingStatus: null,
   };
   return {
     products: state.products.map((p) => ({
@@ -133,36 +155,6 @@ export function placeOrder(
     })),
     items: [],
     orders: [order, ...state.orders],
-  };
-}
-export function nextStatuses(status: OrderStatus): OrderStatus[] {
-  if (status === "주문접수") return ["배송준비", "취소"];
-  if (status === "배송준비") return ["배송중", "취소"];
-  if (status === "배송중") return ["배송완료"];
-  return [];
-}
-export function changeOrderStatus(
-  state: ShopState,
-  orderId: string,
-  status: OrderStatus,
-): ShopState {
-  const order = state.orders.find((o) => o.id === orderId);
-  if (!order) throw new Error("주문을 찾을 수 없습니다.");
-  if (order.status === status) return state;
-  if (!nextStatuses(order.status).includes(status))
-    throw new Error("허용되지 않는 주문 상태 변경입니다.");
-  return {
-    ...state,
-    orders: state.orders.map((o) => (o.id === orderId ? { ...o, status } : o)),
-    products:
-      status === "취소"
-        ? state.products.map((p) => ({
-            ...p,
-            stock:
-              p.stock +
-              (order.items.find((i) => i.productId === p.id)?.quantity ?? 0),
-          }))
-        : state.products,
   };
 }
 export function saveProduct(state: ShopState, product: Product): ShopState {
@@ -199,7 +191,7 @@ export function deleteProduct(state: ShopState, productId: number): ShopState {
     state.orders.some(
       (o) =>
         o.status !== "취소" &&
-        o.status !== "배송완료" &&
+        o.status !== "완료" &&
         o.items.some((i) => i.productId === productId),
     )
   )

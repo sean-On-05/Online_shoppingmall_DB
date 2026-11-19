@@ -163,13 +163,10 @@ export default function Checkout({
             </div>
           </section>
           <section className="checkout-section">
-            <h2>결제 수단</h2>
-            <label className="demo-payment">
-              <input type="radio" checked readOnly /> 데모 결제{" "}
-              <span>금액 청구 없음</span>
-            </label>
+            <h2>주문 후 모의 결제</h2>
             <p className="field-help">
-              카드·계좌 정보 없이 주문 흐름만 체험합니다.
+              주문 접수 후 주문 상세에서 결제 수단을 선택하고 모의 결제를
+              진행합니다. 실제 금액은 청구되지 않습니다.
             </p>
           </section>
         </div>
@@ -204,7 +201,7 @@ export default function Checkout({
             type="submit"
             disabled={busy || invalid}
           >
-            {busy ? "주문 처리 중…" : `${money(subtotal + fee)} 데모 주문`}
+            {busy ? "주문 처리 중…" : `${money(subtotal + fee)} 주문 접수`}
             <Icon name="arrow" size={17} />
           </button>
           <small>주문 접수 시 재고가 차감됩니다.</small>

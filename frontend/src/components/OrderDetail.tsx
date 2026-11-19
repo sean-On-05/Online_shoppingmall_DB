@@ -20,11 +20,14 @@ export default function OrderDetail({ order }: { order: Order }) {
         <span
           className={`status-pill ${order.status === "취소" ? "soldout" : ""}`}
         >
-          {order.status}
+          주문 {order.status}
         </span>
       </div>
       <p className="field-help">
-        {orderDate(order.createdAt)} · {order.payment}
+        {orderDate(order.createdAt)} · 결제 수단: {order.payment ?? "미선택"}
+      </p>
+      <p>
+        결제 {order.paymentStatus} · 배송 {order.shippingStatus ?? "미등록"}
       </p>
       <div className="order-lines">
         {order.items.map((i) => (
@@ -43,27 +46,31 @@ export default function OrderDetail({ order }: { order: Order }) {
       <div className="order-info-grid">
         <section>
           <h3>배송 정보</h3>
-          <dl className="detail-specs">
-            <div>
-              <dt>받는 분</dt>
-              <dd>{order.shipping.recipient}</dd>
-            </div>
-            <div>
-              <dt>연락처</dt>
-              <dd>{order.shipping.phone}</dd>
-            </div>
-            <div>
-              <dt>주소</dt>
-              <dd>
-                ({order.shipping.postalCode}) {order.shipping.address}{" "}
-                {order.shipping.addressDetail}
-              </dd>
-            </div>
-            <div>
-              <dt>요청사항</dt>
-              <dd>{order.shipping.memo || "없음"}</dd>
-            </div>
-          </dl>
+          {order.shipping?.address ? (
+            <dl className="detail-specs">
+              <div>
+                <dt>받는 분</dt>
+                <dd>{order.shipping.recipient}</dd>
+              </div>
+              <div>
+                <dt>연락처</dt>
+                <dd>{order.shipping.phone}</dd>
+              </div>
+              <div>
+                <dt>주소</dt>
+                <dd>
+                  ({order.shipping.postalCode}) {order.shipping.address}{" "}
+                  {order.shipping.addressDetail}
+                </dd>
+              </div>
+              <div>
+                <dt>요청사항</dt>
+                <dd>{order.shipping.memo || "없음"}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p>저장된 배송 정보가 없습니다.</p>
+          )}
         </section>
         <section>
           <h3>주문 금액</h3>
