@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS ORDERS (
  subtotal INTEGER NOT NULL CHECK(subtotal >= 0),
  shipping_fee INTEGER NOT NULL CHECK(shipping_fee >= 0),
  total_amount INTEGER NOT NULL CHECK(total_amount = subtotal + shipping_fee),
- order_status TEXT NOT NULL CHECK(order_status IN ('주문접수','배송준비','배송중','배송완료','취소'))
+ order_status TEXT NOT NULL DEFAULT '주문접수'
+  CHECK(order_status IN ('주문접수','처리중','완료','취소')),
+ warehouse_id INTEGER NOT NULL REFERENCES WAREHOUSE(warehouse_id)
 );
 CREATE TABLE IF NOT EXISTS ORDER_ITEM (
  order_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +74,8 @@ CREATE TABLE IF NOT EXISTS PAYMENT (
  payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
  order_id INTEGER NOT NULL UNIQUE REFERENCES ORDERS(order_id) ON DELETE CASCADE,
  payment_method TEXT NOT NULL,
- payment_status TEXT NOT NULL,
+ payment_status TEXT NOT NULL DEFAULT '대기'
+  CHECK(payment_status IN ('대기','완료','실패','취소')),
  payment_date TEXT
 );
 CREATE TABLE IF NOT EXISTS SHIPMENT (
@@ -80,7 +83,11 @@ CREATE TABLE IF NOT EXISTS SHIPMENT (
  order_id INTEGER NOT NULL UNIQUE REFERENCES ORDERS(order_id) ON DELETE CASCADE,
  tracking_number TEXT,
  shipping_address TEXT NOT NULL,
- shipping_status TEXT NOT NULL,
+ shipping_status TEXT DEFAULT NULL
+  CHECK (
+    shipping_status IS NULL
+    OR shipping_status IN ('배송준비', '배송중', '배송완료')
+  ),
  recipient TEXT NOT NULL,
  phone TEXT NOT NULL,
  postal_code TEXT NOT NULL,

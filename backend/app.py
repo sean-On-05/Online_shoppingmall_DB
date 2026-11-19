@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from flask import Flask, jsonify, request, session, abort
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
-from database import connect, initialize, load_state, save_state
+from database import (
+    connect, initialize, load_state, save_state,
+    create_order, cancel_order, process_payment, register_shipment, update_shipping_status
+)
 
 BASE = Path(__file__).resolve().parent
 app = Flask(__name__)
@@ -166,7 +169,11 @@ def logout():
     session.clear(); owner()
     return jsonify(user=None)
 @app.get('/api/shop')
-def shop(): return transact(lambda s: None)
+def shop():
+    with connect(DB) as db:
+        state = load_state(db)
+
+    return jsonify(**visible(state))
 @app.get('/api/products')
 def products():
     with connect(DB) as db: return jsonify(visible_products(load_state(db)))
@@ -234,36 +241,212 @@ def resume_product(pid):
 
 @app.post('/api/orders')
 def order():
-    shipping=body()
-    for field,limit in [('recipient',50),('address',200),('addressDetail',100),('memo',200),('phone',20),('postalCode',5)]:
-        if not isinstance(shipping.get(field),str) or len(shipping[field])>limit: abort(400,'배송 정보를 확인해 주세요.')
-    if not shipping['recipient'].strip() or not shipping['address'].strip() or not re.fullmatch(r'0\d{8,10}',re.sub(r'[\s-]','',shipping['phone'])) or not re.fullmatch(r'\d{5}',shipping['postalCode']): abort(400,'배송 정보를 확인해 주세요.')
-    def change(s):
-        items=s['carts'].get(owner(),[])
-        if not items: abort(400,'장바구니가 비어 있습니다.')
-        lines=[]
-        for i in items:
-            p=product(s,i['productId'])
-            if p['status'] != '판매중':
-                abort(409, '판매 중지된 상품은 주문할 수 없습니다.')
-            if i['quantity']>p['stock']: abort(409,'재고가 부족합니다.')
-            p['stock']-=i['quantity']; lines.append({'productId':p['id'],'name':p['name'],'image':p['image'],'price':p['price'],'quantity':i['quantity']})
-        subtotal=sum(i['price']*i['quantity'] for i in lines); fee=0 if subtotal>=50000 else 3000
-        oid='SSU-'+uuid.uuid4().hex.upper()
-        s['orders'].insert(0,dict(id=oid,owner=owner(),createdAt=datetime.now(timezone.utc).isoformat(),items=lines,shipping=shipping,subtotal=subtotal,shippingFee=fee,total=subtotal+fee,status='주문접수',payment='데모 결제'))
-        s['carts'][owner()]=[]
-        return {'orderId':oid}
-    return transact(change)
+    shipping = body()
+    # 기존 프론트엔드의 배송 정보 입력값 검증
+    for field, limit in [
+        ('recipient', 50),
+        ('address', 200),
+        ('addressDetail', 100),
+        ('memo', 200),
+        ('phone', 20),
+        ('postalCode', 5)
+    ]:
+        value = shipping.get(field)
+        if not isinstance(value, str) or len(value) > limit:
+            abort(400, '배송 정보를 확인해 주세요.')
+
+    if (
+        not shipping['recipient'].strip()
+        or not shipping['address'].strip()
+        or not re.fullmatch(
+            r'0\d{8,10}',
+            re.sub(r'[\s-]', '', shipping['phone'])
+        )
+        or not re.fullmatch(r'\d{5}', shipping['postalCode'])
+    ):
+        abort(400, '배송 정보를 확인해 주세요.')
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            order_code = create_order(
+                db,
+                owner_key=owner(),
+                warehouse_id=1,
+                shipping=shipping
+            )
+
+
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            orderId=order_code
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+
+@app.post('/api/orders/<order_code>/payment')
+def pay_order(order_code):
+    data = body()
+
+    # success는 반드시 boolean이어야 함
+    success = data.get('success', True)
+    payment_method = data.get('paymentMethod', '카드')
+
+    if type(success) is not bool:
+        abort(400, '결제 결과는 true 또는 false여야 합니다.')
+
+    # 로그인 고객 또는 비회원 세션의 주문 소유자 확인
+    with connect(DB) as db:
+        order = db.execute(
+            """
+            SELECT order_id, owner_key
+            FROM ORDERS
+            WHERE order_code = ?
+            """,
+            (order_code,)
+        ).fetchone()
+
+        if order is None:
+            abort(404, '존재하지 않는 주문입니다.')
+
+        if order['owner_key'] != owner() and not is_admin():
+            abort(403, '해당 주문에 접근할 권한이 없습니다.')
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            # SQL 트랜잭션 내부에서 결제 처리
+            payment_status = process_payment(
+                db,
+                order_code=order_code,
+                success=success,
+                payment_method=payment_method
+            )
+
+        # 결제 저장이 완료된 이후 최신 정보 조회
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            paymentStatus=payment_status
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+@app.post('/api/orders/<order_code>/shipment')
+def create_shipment(order_code):
+    admin()
+
+    shipping = body()
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            shipping_status = register_shipment(
+                db,
+                order_code=order_code,
+                shipping=shipping
+            )
+
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            shippingStatus=shipping_status
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+
+@app.patch('/api/orders/<order_code>/shipment')
+def change_shipping_status(order_code):
+    # 배송 상태 변경은 관리자만 가능
+    admin()
+
+    data = body()
+    new_status = data.get('status')
+
+    if new_status not in ('배송중', '배송완료'):
+        abort(400, '변경할 배송 상태가 올바르지 않습니다.')
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+
+            shipping_status = update_shipping_status(
+                db,
+                order_code=order_code,
+                new_status=new_status
+            )
+
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(
+            **visible(state),
+            shippingStatus=shipping_status
+        )
+
+    except ValueError as e:
+        abort(409, str(e))
+
 @app.patch('/api/orders/<oid>')
 def status(oid):
-    admin(); target=body().get('status')
+    admin()
+
+    target = body().get('status')
+
+    # 주문 취소는 별도의 SQL 트랜잭션으로 처리
+    if target != '취소':
+        abort(
+            409,
+            '주문 진행 상태는 배송 등록 및 배송 상태 API에서 관리합니다.'
+        )
+
+    try:
+        with connect(DB) as db:
+            db.execute('BEGIN IMMEDIATE')
+            cancel_order(db, order_code=oid)
+
+        with connect(DB) as db:
+            state = load_state(db)
+
+        return jsonify(**visible(state))
+
+    except ValueError as e:
+        abort(409, str(e))
+
+    # 나머지 상태 변경은 기존 방식 유지
     def change(s):
-        o=next((o for o in s['orders'] if o['id']==oid),None)
-        if not o: abort(404,'주문을 찾을 수 없습니다.')
-        if target==o['status']: return
-        if target not in {'주문접수':['배송준비','취소'],'배송준비':['배송중','취소'],'배송중':['배송완료']}.get(o['status'],[]): abort(409,'허용되지 않는 상태 변경입니다.')
-        if target=='취소':
-            for i in o['items']: product(s,i['productId'])['stock']+=i['quantity']
-        o['status']=target
+        o = next(
+            (o for o in s['orders'] if o['id'] == oid),
+            None
+        )
+
+        if not o:
+            abort(404, '주문을 찾을 수 없습니다.')
+
+        if target == o['status']:
+            return
+
+        allowed = {
+            '주문접수': ['배송준비'],
+            '배송준비': ['배송중'],
+            '배송중': ['배송완료']
+        }
+
+        if target not in allowed.get(o['status'], []):
+            abort(409, '허용되지 않는 상태 변경입니다.')
+
+        o['status'] = target
+
     return transact(change)
 if __name__=='__main__': app.run(host='127.0.0.1',port=5000)
