@@ -101,7 +101,7 @@ export default function Navbar({
             </a>
             {canManageShop(user) && (
               <a className="admin-link" href="#/admin">
-                관리자
+                관리자화면
               </a>
             )}
             {user ? (
