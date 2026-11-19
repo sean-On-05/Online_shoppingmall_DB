@@ -41,7 +41,10 @@ def integer(value, low, high):
     return type(value) is int and low <= value <= high
 def visible(s):
     key=owner()
-    return {'products': s['products'], 'items': s['carts'].get(key, []), 'orders': [{k:v for k,v in o.items() if k!='owner'} for o in s['orders'] if is_admin() or o['owner']==key]}
+    return {'products': visible_products(s), 'items': s['carts'].get(key, []), 'orders': [{k:v for k,v in o.items() if k!='owner'} for o in s['orders'] if is_admin() or o['owner']==key]}
+
+def visible_products(s):
+    return s['products'] if is_admin() else [p for p in s['products'] if p['status'] == '판매중']
 def transact(fn):
     with connect(DB) as db:
         db.execute('BEGIN IMMEDIATE')
@@ -166,10 +169,13 @@ def logout():
 def shop(): return transact(lambda s: None)
 @app.get('/api/products')
 def products():
-    with connect(DB) as db: return jsonify(load_state(db)['products'])
+    with connect(DB) as db: return jsonify(visible_products(load_state(db)))
 @app.get('/api/products/<int:pid>')
 def detail(pid):
-    with connect(DB) as db: return jsonify(product(load_state(db),pid))
+    with connect(DB) as db:
+        p = product(load_state(db),pid)
+        if p['status'] != '판매중' and not is_admin(): abort(404, '판매가 중지된 상품입니다.')
+        return jsonify(p)
 @app.put('/api/cart/items/<int:pid>')
 def cart(pid):
     b=body(); q=b.get('quantity'); increment=b.get('increment')
@@ -178,6 +184,7 @@ def cart(pid):
         old=next((i['quantity'] for i in items if i['productId']==pid),0)
         qty=old+increment if integer(increment,1,99) else q
         if not integer(qty,0,99): abort(400,'수량은 0~99 정수여야 합니다.')
+        if qty and product(s,pid)['status'] != '판매중': abort(409, '판매 중지된 상품은 장바구니에 담을 수 없습니다.')
         if qty and qty>product(s,pid)['stock']: abort(409,'재고가 부족합니다.')
         s['carts'][owner()]=[i for i in items if i['productId']!=pid]+([{'productId':pid,'quantity':qty}] if qty else [])
     return transact(change)
@@ -187,6 +194,7 @@ def save(pid=None):
     admin(); b=body()
     def change(s):
         nonlocal pid
+        current_status = product(s,pid)['status'] if pid is not None else '판매중'
         if pid is not None: product(s,pid)
         else: pid=max([p['id'] for p in s['products']]+[100])+1
         if not isinstance(b.get('name'),str) or not 1<=len(b['name'].strip())<=80: abort(400,'상품명을 확인해 주세요.')
@@ -196,6 +204,7 @@ def save(pid=None):
         for field in ['image','description']:
             if not isinstance(b.get(field),str) or not b[field].strip(): abort(400,'이미지와 설명이 필요합니다.')
         p={k:b[k] for k in ['name','price','stock','category','image','description','originalPrice','label'] if k in b and b[k] is not None}; p['id']=pid
+        p['status'] = current_status
         s['products']=[p if x['id']==pid else x for x in s['products']] if any(x['id']==pid for x in s['products']) else [p]+s['products']
     return transact(change)
 @app.delete('/api/products/<int:pid>')
@@ -209,8 +218,20 @@ def delete(pid):
             abort(409, '이미 판매 중지된 상품입니다.')
 
         p['status'] = '판매중지'
+        for key, items in s['carts'].items():
+            s['carts'][key] = [item for item in items if item['productId'] != pid]
 
     return transact(change)
+@app.post('/api/products/<int:pid>/resume')
+def resume_product(pid):
+    admin()
+    def change(s):
+        p = product(s, pid)
+        if p['status'] != '판매중지':
+            abort(409, '이미 판매 중인 상품입니다.')
+        p['status'] = '판매중'
+    return transact(change)
+
 @app.post('/api/orders')
 def order():
     shipping=body()
