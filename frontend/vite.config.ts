@@ -14,9 +14,9 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:5000",
-        // Preserve the browser's Host so Flask can validate Origin correctly.
-        changeOrigin: false,
+        target: "https://h21yess12.pythonanywhere.com",
+        changeOrigin: true,
+        secure: true,
       },
     },
   },
