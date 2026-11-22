@@ -1,6 +1,7 @@
 import json, os, re, secrets, sqlite3, uuid
 from pathlib import Path
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from flask import Flask, jsonify, request, session, abort
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -15,6 +16,11 @@ secret_path = BASE / '.session-secret'
 if not secret_path.exists():
     secret_path.write_text(secrets.token_hex(32))
 app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY') or secret_path.read_text(), SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
+app.config['ALLOWED_ORIGINS'] = frozenset({
+    'https://online-shoppingmall-db.vercel.app',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+})
 DB = os.environ.get('SHOP_DATABASE', str(BASE / 'shop.sqlite3'))
 initialize(DB)
 
@@ -61,12 +67,49 @@ def product(s, pid):
     return p
 @app.errorhandler(HTTPException)
 def error(e): return jsonify(message=e.description), e.code
+
+def normalized_origin(value):
+    """Compare scheme, hostname and port; never allow suffix/wildcard matches."""
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in ('', '/') or parsed.query or parsed.fragment
+                or any(character.isspace() for character in value)):
+            return None
+        host = parsed.hostname.lower()
+        if ':' in host:
+            host = '[' + host + ']'
+        port = parsed.port
+        suffix = '' if port is None or port == (443 if parsed.scheme == 'https' else 80) else ':' + str(port)
+        return parsed.scheme + '://' + host + suffix
+    except ValueError:
+        return None
+
 @app.before_request
 def origin_check():
-    if request.method not in ('GET','HEAD','OPTIONS'):
-        from urllib.parse import urlparse
-        origin=request.headers.get('Origin')
-        if origin and urlparse(origin).netloc != request.host: abort(403,'허용되지 않는 요청입니다.')
+    if request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return
+    origin = request.headers.get('Origin')
+    if origin is None:
+        referer = request.headers.get('Referer')
+        if referer:
+            try:
+                parsed = urlsplit(referer)
+                origin = parsed.scheme + '://' + parsed.netloc
+            except ValueError:
+                abort(403, '허용되지 않는 요청입니다.')
+        elif request.headers.get('Sec-Fetch-Site') == 'cross-site':
+            abort(403, '허용되지 않는 요청입니다.')
+        else:
+            # Preserve non-browser clients that do not send Origin/Referer.
+            return
+    origin = normalized_origin(origin)
+    # Do not trust X-Forwarded-Host to expand this allowlist. Vercel rewrites
+    # may deliver the PythonAnywhere Host while preserving the browser Origin.
+    if origin is None or (origin != normalized_origin(request.host_url)
+                          and origin not in app.config['ALLOWED_ORIGINS']):
+        abort(403, '허용되지 않는 요청입니다.')
 
 @app.before_request
 def active_session_check():
