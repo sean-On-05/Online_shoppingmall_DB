@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request, session, abort
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 from database import (
-    connect, initialize, load_state, save_state,
+    connect, initialize, load_state, save_state, load_orders,
     create_order, cancel_order, process_payment, register_shipment, update_shipping_status
 )
 
@@ -29,7 +29,7 @@ def public_account(row):
 
 def is_admin():
     row = account(session.get('username'))
-    return bool(row and row['is_admin'])
+    return bool(row and row['is_active'] and row['is_admin'])
 
 def owner():
     if 'visitor' not in session: session['visitor'] = uuid.uuid4().hex
@@ -67,6 +67,21 @@ def origin_check():
         from urllib.parse import urlparse
         origin=request.headers.get('Origin')
         if origin and urlparse(origin).netloc != request.host: abort(403,'허용되지 않는 요청입니다.')
+
+@app.before_request
+def active_session_check():
+    # Check the database on every authenticated request, including guest-capable
+    # cart/order APIs: a suspended session must never fall back to guest access.
+    if not request.path.startswith('/api/') or request.endpoint in ('health', 'login', 'logout'):
+        return
+    username = session.get('username')
+    if username:
+        row = account(username)
+        if not row:
+            abort(401, '로그인이 필요합니다.')
+        if not row['is_active']:
+            abort(403, '정지된 계정입니다. 관리자에게 문의해 주세요.')
+
 @app.get('/')
 @app.get('/api/health')
 def health(): return jsonify(status='ok',service='ssu-mall-backend')
@@ -113,6 +128,7 @@ def register():
 def require_customer():
     row = account(session.get('username'))
     if not row: abort(401, '로그인이 필요합니다.')
+    if not row['is_active']: abort(403, '정지된 계정입니다. 관리자에게 문의해 주세요.')
     return row
 
 def profile(row):
@@ -145,11 +161,143 @@ def my_orders():
         orders = load_state(db)['orders']
         return jsonify([{k:v for k,v in o.items() if k != 'owner'} for o in orders if o['owner'] == row['username']])
 
+def default_address(db, customer_id):
+    row = db.execute('''SELECT recipient, phone, postal_code, address, address_detail, memo
+        FROM DEFAULT_ADDRESS WHERE customer_id=?''', (customer_id,)).fetchone()
+    if row is None:
+        return None
+    return dict(recipient=row['recipient'], phone=row['phone'], postalCode=row['postal_code'],
+                address=row['address'], addressDetail=row['address_detail'], memo=row['memo'])
+
+@app.get('/api/me/default-address')
+def get_default_address():
+    customer = require_customer()
+    with connect(DB) as db:
+        return jsonify(address=default_address(db, customer['customer_id']))
+
+@app.put('/api/me/default-address')
+def save_default_address():
+    customer = require_customer()
+    data = body()
+    # Ownership comes exclusively from the session, never from the request body.
+    shipping = {field: data.get(field, '') for field in
+                ('recipient', 'phone', 'postalCode', 'address', 'addressDetail', 'memo')}
+    validate_shipping(shipping)
+    shipping = {key: value.strip() for key, value in shipping.items()}
+    shipping['phone'] = re.sub(r'[\s-]', '', shipping['phone'])
+    with connect(DB) as db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('''INSERT INTO DEFAULT_ADDRESS
+            (customer_id, recipient, phone, postal_code, address, address_detail, memo)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(customer_id) DO UPDATE SET recipient=excluded.recipient,
+            phone=excluded.phone, postal_code=excluded.postal_code, address=excluded.address,
+            address_detail=excluded.address_detail, memo=excluded.memo''',
+            (customer['customer_id'], shipping['recipient'], shipping['phone'], shipping['postalCode'],
+             shipping['address'], shipping['addressDetail'], shipping['memo']))
+    return jsonify(address=shipping, message='기본 배송지를 저장했습니다.')
+
+@app.delete('/api/me/default-address')
+def delete_default_address():
+    customer = require_customer()
+    with connect(DB) as db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('DELETE FROM DEFAULT_ADDRESS WHERE customer_id=?', (customer['customer_id'],))
+    return jsonify(address=None, message='기본 배송지를 삭제했습니다.')
+
+@app.get('/api/admin/members')
+def admin_members():
+    admin()
+    query = request.args.get('q', '').strip()
+    if len(query) > 100:
+        abort(400, '검색어는 100자 이내로 입력해 주세요.')
+    with connect(DB) as db:
+        total = db.execute('SELECT COUNT(*) FROM CUSTOMER').fetchone()[0]
+        rows = db.execute('''SELECT customer_id, username, name, is_admin, is_active, created_at
+            FROM CUSTOMER
+            WHERE instr(lower(username), lower(?)) > 0 OR instr(lower(name), lower(?)) > 0
+            ORDER BY customer_id DESC''', (query, query)).fetchall()
+    return jsonify(total=total, members=[dict(
+        id=r['customer_id'], username=r['username'], name=r['name'],
+        role='admin' if r['is_admin'] else 'customer', createdAt=r['created_at'],
+        isAdmin=bool(r['is_admin']), isActive=bool(r['is_active'])
+    ) for r in rows])
+
+def member_record(db, member_id):
+    row = db.execute('''SELECT customer_id, username, name, email, phone, address,
+        is_admin, is_active, created_at FROM CUSTOMER WHERE customer_id=?''', (member_id,)).fetchone()
+    if row is None:
+        abort(404, '회원을 찾을 수 없습니다.')
+    return row
+
+@app.get('/api/admin/members/<int:member_id>')
+def admin_member_detail(member_id):
+    admin()
+    with connect(DB) as db:
+        row = member_record(db, member_id)
+    return jsonify(member_detail(row))
+
+def member_detail(row):
+    return dict(**profile(row), id=row['customer_id'],
+                role='admin' if row['is_admin'] else 'customer', createdAt=row['created_at'],
+                isAdmin=bool(row['is_admin']), isActive=bool(row['is_active']))
+
+def change_member_access(member_id, field):
+    value = body().get('isActive' if field == 'is_active' else 'isAdmin')
+    if type(value) is not bool:
+        abort(400, '변경 값은 true 또는 false여야 합니다.')
+    with connect(DB) as db:
+        db.execute('BEGIN IMMEDIATE')
+        # Recheck the actor after acquiring the write lock. An administrator
+        # revoked by a concurrent request cannot perform a queued mutation.
+        actor = db.execute('SELECT customer_id, is_admin, is_active FROM CUSTOMER WHERE username=?',
+                           (session.get('username'),)).fetchone()
+        if not actor or not actor['is_admin'] or not actor['is_active']:
+            abort(403, '관리자 권한이 필요합니다.')
+        target = member_record(db, member_id)
+        if field == 'is_active':
+            if not value and target['customer_id'] == actor['customer_id']:
+                abort(409, '자신의 계정은 정지할 수 없습니다.')
+            if not value and target['is_admin']:
+                abort(409, '관리자 계정은 정지할 수 없습니다. 먼저 관리자 권한을 회수해 주세요.')
+            db.execute('UPDATE CUSTOMER SET is_active=? WHERE customer_id=?', (int(value), member_id))
+        else:
+            if not value and target['is_admin']:
+                count = db.execute('SELECT COUNT(*) FROM CUSTOMER WHERE is_admin=1 AND is_active=1').fetchone()[0]
+                if target['is_active'] and count <= 1:
+                    abort(409, '마지막 관리자 계정의 권한은 회수할 수 없습니다.')
+                if target['customer_id'] == actor['customer_id']:
+                    abort(409, '자신의 관리자 권한은 회수할 수 없습니다.')
+            if value and not target['is_active']:
+                abort(409, '정지된 계정은 정지를 해제한 후 관리자 권한을 부여해 주세요.')
+            db.execute('UPDATE CUSTOMER SET is_admin=? WHERE customer_id=?', (int(value), member_id))
+        result = member_detail(member_record(db, member_id))
+    return jsonify(result)
+
+@app.patch('/api/admin/members/<int:member_id>/status')
+def admin_member_status(member_id):
+    admin()
+    return change_member_access(member_id, 'is_active')
+
+@app.patch('/api/admin/members/<int:member_id>/role')
+def admin_member_role(member_id):
+    admin()
+    return change_member_access(member_id, 'is_admin')
+
+@app.get('/api/admin/members/<int:member_id>/orders')
+def admin_member_orders(member_id):
+    admin()
+    with connect(DB) as db:
+        member_record(db, member_id)
+        orders = load_orders(db, customer_id=member_id)
+    return jsonify([{k: v for k, v in order.items() if k != 'owner'} for order in orders])
+
 @app.post('/api/session')
 def login():
     b=body(); name=b.get('username')
     row = account(name) if isinstance(name,str) else None
     if not row or not isinstance(b.get('password'),str) or not check_password_hash(row['password_hash'],b['password']): abort(401,'로그인 정보를 확인해 주세요.')
+    if not row['is_active']: abort(403, '정지된 계정입니다. 관리자에게 문의해 주세요.')
     old=owner()
     session['username']=name
     def merge(s):
@@ -239,10 +387,7 @@ def resume_product(pid):
         p['status'] = '판매중'
     return transact(change)
 
-@app.post('/api/orders')
-def order():
-    shipping = body()
-    # 기존 프론트엔드의 배송 정보 입력값 검증
+def validate_shipping(shipping):
     for field, limit in [
         ('recipient', 50),
         ('address', 200),
@@ -265,6 +410,12 @@ def order():
         or not re.fullmatch(r'\d{5}', shipping['postalCode'])
     ):
         abort(400, '배송 정보를 확인해 주세요.')
+
+
+@app.post('/api/orders')
+def order():
+    shipping = body()
+    validate_shipping(shipping)
 
     try:
         with connect(DB) as db:

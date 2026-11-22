@@ -5,6 +5,7 @@ import type { Order } from "../domain";
 import { api } from "../api";
 import { money } from "../data";
 import { orderDate } from "../components/OrderDetail";
+import DefaultAddress from "../components/DefaultAddress";
 
 interface Profile { username: string; name: string; email: string; phone: string; address: string }
 
@@ -58,6 +59,7 @@ export default function MyPage({ user }: { user: SessionUser | null }) {
             {message && <p role="status">{message}</p>}
             <button className="primary-button" disabled={saving}>{saving ? "저장 중…" : "개인정보 저장"}</button>
           </form>
+          <DefaultAddress />
         </section>
         <section className="checkout-section" id="order-section"><h2>나의 주문 내역 <small>({orders.length}건)</small></h2>
           {orders.length ? <div className="customer-orders">{orders.map(o => <a className="customer-order-card" key={o.id} href={`#/orders/${o.id}`}><div><span className="field-help">{orderDate(o.createdAt)}</span><span className="status-pill">{o.status}</span></div><strong>{o.items[0]?.name}{o.items.length > 1 ? ` 외 ${o.items.length - 1}종` : ""}</strong><p>{o.id}</p><p>결제 {o.paymentStatus} · 배송 {o.shippingStatus ?? "미등록"}</p><div><b>{money(o.total)}</b><span>상세 보기 →</span></div></a>)}</div> : <p>아직 주문 내역이 없어요.</p>}

@@ -9,7 +9,9 @@ import {
   type OrderAction,
 } from "../domain";
 import OrderDetail, { orderDate } from "../components/OrderDetail";
+import MemberManagement from "../components/MemberManagement";
 interface Props {
+  currentUserId: string;
   products: Product[];
   orders: Order[];
   section: string;
@@ -20,6 +22,7 @@ interface Props {
   onLogout: () => void;
 }
 export default function Admin({
+  currentUserId,
   products,
   orders,
   section,
@@ -30,7 +33,7 @@ export default function Admin({
   onLogout,
 }: Props) {
   const tab =
-    section === "inventory" || section === "orders" ? section : "products";
+    section === "inventory" || section === "orders" || section === "members" ? section : "products";
   const [editing, setEditing] = useState<Product | null>(null);
   const [deleting, setDeleting] = useState<Product | null>(null);
   const salePending = useRef(false);
@@ -127,6 +130,7 @@ export default function Admin({
           { key: "products", label: "상품 관리" },
           { key: "inventory", label: "재고 현황" },
           { key: "orders", label: "주문 관리" },
+          { key: "members", label: "회원 관리" },
         ].map((t) => (
           <a
             key={t.key}
@@ -143,6 +147,7 @@ export default function Admin({
         ))}
         <a href="#/">고객용 쇼핑몰 ↗</a>
       </nav>
+      {tab === "members" ? <MemberManagement currentUserId={currentUserId} /> : <>
       <div className="admin-heading">
         <div>
           <h1>{title}</h1>
@@ -423,6 +428,7 @@ export default function Admin({
         Flask 서버에 저장되는 데모 관리 화면입니다. 주문접수 → 배송준비 → 배송중
         → 배송완료 순서로 처리하며, 배송 전 취소 시 재고가 복원됩니다.
       </p>
+      </>}
       <Modal show={!!editing} onClose={() => setEditing(null)} size="lg">
         <ModalHeader>
           {products.some((p) => p.id === editing?.id)

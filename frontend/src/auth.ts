@@ -69,7 +69,7 @@ export function loginDestination(
   returnTo: string | null,
 ): string {
   if (!returnTo) return "/";
-  if (/^\/admin(?:\/(?:products|inventory|orders))?$/.test(returnTo))
+  if (/^\/admin(?:\/(?:products|inventory|orders|members))?$/.test(returnTo))
     return canManageShop(user) ? returnTo : "/";
   if (
     /^\/(?:mypage|cart|checkout|orders(?:\/SSU-[A-Z0-9-]+)?|products\/\d+)$/.test(

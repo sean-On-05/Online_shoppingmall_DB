@@ -2577,4 +2577,9 @@ td {
 .mypage-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 28px; align-items: start; }
 .mypage-grid > section { min-width: 0; scroll-margin-top: 24px; }
 .mypage .customer-order-card { overflow-wrap: anywhere; }
+.default-address-section { border-top: 1px solid var(--ssu-border); margin-top: 28px; padding-top: 28px; }
+.shipping-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.shipping-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.shipping-section-heading h2 { margin-bottom: 0; }
+.shipping-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 @media (max-width: 900px) { .mypage-grid { grid-template-columns: 1fr; } }

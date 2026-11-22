@@ -112,6 +112,7 @@ export default function App() {
   if (isAdmin)
     content = canManageShop(user) ? (
       <Admin
+        currentUserId={user?.id ?? ""}
         products={shop.products}
         orders={shop.orders}
         section={path.split("/")[2] ?? "products"}
@@ -210,6 +211,8 @@ export default function App() {
   else if (path === "/checkout")
     content = (
       <Checkout
+        key={user?.id ?? "guest"}
+        userId={user?.id ?? null}
         products={storefrontProducts}
         items={shop.items}
         onSubmit={checkout}

@@ -14,8 +14,8 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "https://h21yess12.pythonanywhere.com",
-        changeOrigin: true,
+        target: 'http://127.0.0.1:5000',
+        changeOrigin: false,
         secure: true,
       },
     },

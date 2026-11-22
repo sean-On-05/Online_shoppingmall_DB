@@ -1,13 +1,23 @@
-import { useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { Modal, ModalBody, ModalFooter, ModalHeader } from "flowbite-react";
 import { money, productImage, type Product, type CartItem } from "../data";
-import { shippingFee, type ShippingInfo } from "../domain";
+import { shippingFee, validateShipping, type ShippingInfo } from "../domain";
 import Icon from "../components/Icon";
+import ShippingFields from "../components/ShippingFields";
+import { api } from "../api";
+import {
+  createShippingDraft,
+  hasShippingInput,
+  shippingDraftReducer,
+} from "../shippingDraft";
 export default function Checkout({
+  userId,
   products,
   items,
   onSubmit,
 }: {
+  userId: string | null;
   products: Product[];
   items: CartItem[];
   onSubmit: (shipping: ShippingInfo) => Promise<string | null>;
@@ -15,6 +25,73 @@ export default function Checkout({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
+  const [draft, dispatch] = useReducer(
+    shippingDraftReducer,
+    undefined,
+    createShippingDraft,
+  );
+  const [defaultAddress, setDefaultAddress] = useState<ShippingInfo | null>(
+    null,
+  );
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [addressError, setAddressError] = useState("");
+  const [addressNotice, setAddressNotice] = useState("");
+  const [addressRetry, setAddressRetry] = useState(0);
+  const [replaceConfirm, setReplaceConfirm] = useState(false);
+  const initialLookupDone = useRef(false);
+
+  useEffect(() => {
+    if (!userId) return;
+    let active = true;
+    async function load() {
+      setAddressLoading(true);
+      setAddressError("");
+      try {
+        const result = await api<{ address: ShippingInfo | null }>(
+          "/me/default-address",
+        );
+        if (!active) return;
+        setDefaultAddress(result.address);
+        if (!initialLookupDone.current && !submitting.current) {
+          dispatch({ type: "automatic", address: result.address });
+        }
+      } catch (e) {
+        if (active)
+          setAddressError(
+            e instanceof Error
+              ? e.message
+              : "기본 배송지를 불러오지 못했습니다.",
+          );
+      } finally {
+        if (active) {
+          initialLookupDone.current = true;
+          setAddressLoading(false);
+        }
+      }
+    }
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [userId, addressRetry]);
+
+  function loadDefaultAddress() {
+    if (!defaultAddress || busy) return;
+    if (hasShippingInput(draft.values)) {
+      setReplaceConfirm(true);
+      return;
+    }
+    applyDefaultAddress();
+  }
+
+  function applyDefaultAddress() {
+    if (!defaultAddress || busy) return;
+    dispatch({ type: "replace", address: defaultAddress });
+    setReplaceConfirm(false);
+    setAddressNotice(
+      "기본 배송지를 불러왔습니다. 주문서에서 수정해도 기본 배송지는 변경되지 않습니다.",
+    );
+  }
   const rows = items.flatMap((i) => {
     const product = products.find((p) => p.id === i.productId);
     return product ? [{ ...i, product }] : [];
@@ -30,17 +107,17 @@ export default function Checkout({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting.current) return;
+    const shipping = Object.fromEntries(
+      Object.entries(draft.values).map(([key, value]) => [key, value.trim()]),
+    ) as unknown as ShippingInfo;
+    try {
+      validateShipping(shipping);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "배송 정보를 확인해 주세요.");
+      return;
+    }
     submitting.current = true;
     setBusy(true);
-    const form = new FormData(e.currentTarget);
-    const shipping: ShippingInfo = {
-      recipient: String(form.get("recipient")).trim(),
-      phone: String(form.get("phone")).trim(),
-      postalCode: String(form.get("postalCode")).trim(),
-      address: String(form.get("address")).trim(),
-      addressDetail: String(form.get("addressDetail")).trim(),
-      memo: String(form.get("memo")).trim(),
-    };
     const result = await onSubmit(shipping);
     if (result) {
       setError(result);
@@ -97,70 +174,50 @@ export default function Checkout({
             </a>
           </section>
           <section className="checkout-section">
-            <h2>배송 정보</h2>
-            <div className="form-grid product-form">
-              <label>
-                받는 분
-                <input
-                  name="recipient"
-                  required
-                  maxLength={50}
-                  autoComplete="shipping name"
-                  placeholder="테스트 수령인"
-                />
-              </label>
-              <label>
-                연락처
-                <input
-                  name="phone"
-                  type="tel"
-                  required
-                  maxLength={20}
-                  autoComplete="shipping tel"
-                  placeholder="010-0000-0000"
-                />
-              </label>
-              <label>
-                우편번호
-                <input
-                  name="postalCode"
-                  required
-                  inputMode="numeric"
-                  pattern="[0-9]{5}"
-                  maxLength={5}
-                  autoComplete="shipping postal-code"
-                  placeholder="숫자 5자리"
-                />
-              </label>
-              <label className="form-full">
-                기본 주소
-                <input
-                  name="address"
-                  required
-                  maxLength={200}
-                  autoComplete="shipping address-line1"
-                  placeholder="도로명 또는 지번 주소"
-                />
-              </label>
-              <label className="form-full">
-                상세 주소 (선택)
-                <input
-                  name="addressDetail"
-                  maxLength={100}
-                  autoComplete="shipping address-line2"
-                  placeholder="동·호수 등"
-                />
-              </label>
-              <label className="form-full">
-                배송 요청사항 (선택)
-                <textarea
-                  name="memo"
-                  maxLength={200}
-                  rows={3}
-                  placeholder="배송 시 요청사항을 남겨 주세요."
-                />
-              </label>
+            <div className="shipping-section-heading">
+              <h2>배송 정보</h2>
+              {userId && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={addressLoading || !defaultAddress || busy}
+                  onClick={loadDefaultAddress}
+                >
+                  {addressLoading ? "조회 중…" : "기본 배송지 불러오기"}
+                </button>
+              )}
             </div>
+            {userId && !addressLoading && !addressError && !defaultAddress && (
+              <p className="field-help">
+                등록된 기본 배송지가 없습니다.{" "}
+                <a href="#/mypage">마이페이지에서 등록하기</a>
+              </p>
+            )}
+            {addressError && (
+              <p className="form-error" role="alert">
+                {addressError}{" "}
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={addressLoading || busy}
+                  onClick={() => setAddressRetry((value) => value + 1)}
+                >
+                  다시 조회
+                </button>
+              </p>
+            )}
+            {addressNotice && (
+              <p className="field-help" role="status">
+                {addressNotice}
+              </p>
+            )}
+            <ShippingFields
+              value={draft.values}
+              disabled={busy}
+              onChange={(field, value) =>
+                dispatch({ type: "edit", field, value })
+              }
+            />
           </section>
           <section className="checkout-section">
             <h2>주문 후 모의 결제</h2>
@@ -207,6 +264,33 @@ export default function Checkout({
           <small>주문 접수 시 재고가 차감됩니다.</small>
         </aside>
       </form>
+      <Modal
+        show={replaceConfirm}
+        onClose={() => setReplaceConfirm(false)}
+        size="md"
+      >
+        <ModalHeader>기본 배송지 불러오기</ModalHeader>
+        <ModalBody>
+          <p>입력한 배송 정보를 기본 배송지로 바꾸시겠어요?</p>
+          <p className="field-help">현재 주문서의 배송 정보만 변경됩니다.</p>
+        </ModalBody>
+        <ModalFooter>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setReplaceConfirm(false)}
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={applyDefaultAddress}
+          >
+            기본 배송지로 교체
+          </button>
+        </ModalFooter>
+      </Modal>
     </main>
   );
 }

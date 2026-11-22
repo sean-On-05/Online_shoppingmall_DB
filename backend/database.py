@@ -375,8 +375,14 @@ def load_state(db):
         if r['label'] is not None: p['label'] = r['label']
         products.append(p)
     carts = {r['owner_key']: [dict(productId=i['product_id'], quantity=i['quantity']) for i in db.execute('SELECT * FROM CART_ITEM WHERE cart_id=?', (r['cart_id'],))] for r in db.execute('SELECT * FROM CART')}
+    return dict(products=products, carts=carts, orders=load_orders(db))
+
+def load_orders(db, customer_id=None):
+    """Keep the shared order response format; optionally select one customer's orders."""
     orders = []
-    for r in db.execute('SELECT * FROM ORDERS ORDER BY order_id DESC'):
+    rows = db.execute('SELECT * FROM ORDERS ORDER BY order_id DESC') if customer_id is None else db.execute(
+        'SELECT * FROM ORDERS WHERE customer_id=? ORDER BY order_id DESC', (customer_id,))
+    for r in rows:
         shipping = db.execute('SELECT * FROM SHIPMENT WHERE order_id=?', (r['order_id'],)).fetchone()
         payment = db.execute('SELECT * FROM PAYMENT WHERE order_id=?', (r['order_id'],)).fetchone()
         items = [dict(productId=i['original_product_id'], name=i['product_name'], image=i['image'], quantity=i['quantity'], price=i['unit_price']) for i in db.execute('SELECT * FROM ORDER_ITEM WHERE order_id=? ORDER BY order_item_id', (r['order_id'],))]
@@ -403,7 +409,7 @@ def load_state(db):
             shippingStatus=shipping['shipping_status'] if shipping else None
         ))
 
-    return dict(products=products, carts=carts, orders=orders)
+    return orders
 
 def save_state(db, state):
     # Mutations run under BEGIN IMMEDIATE; unchanged order snapshots are never rewritten.
@@ -467,8 +473,20 @@ def initialize(path):
             if not Path(backup).exists():
                 with sqlite3.connect(backup) as target: db.backup(target)
         db.execute('BEGIN IMMEDIATE')
-        if db.execute('PRAGMA user_version').fetchone()[0] >= 1: return
-        for statement in (BASE/'schema.sql').read_text(encoding='utf-8-sig').split(';'):
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+        statements = (BASE/'schema.sql').read_text(encoding='utf-8-sig').split(';')
+        if version >= 1:
+            # Transactional, repeatable upgrade; preserve all customer/order rows.
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(CUSTOMER)')}
+            if 'is_active' not in columns:
+                db.execute('ALTER TABLE CUSTOMER ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1))')
+            for statement in statements:
+                if statement.strip().startswith('CREATE TABLE IF NOT EXISTS DEFAULT_ADDRESS'):
+                    db.execute(statement)
+            if version < 3:
+                db.execute('PRAGMA user_version=3')
+            return
+        for statement in statements:
             if statement.strip(): db.execute(statement)
         for username,name,flag in [('ADMIN','관리자',1),('user','숭실인',0)]:
             db.execute('INSERT INTO CUSTOMER(username,name,password_hash,is_admin) VALUES (?,?,?,?)',(username,name,generate_password_hash(username),flag))
@@ -482,7 +500,7 @@ def initialize(path):
         save_state(db,state)
         if db.execute('PRAGMA foreign_key_check').fetchall(): raise ValueError('Foreign key validation failed')
         if legacy: db.execute('DROP TABLE state')
-        db.execute('PRAGMA user_version=1')
+        db.execute('PRAGMA user_version=3')
     
 
 
