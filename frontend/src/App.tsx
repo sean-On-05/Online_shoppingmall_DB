@@ -117,9 +117,10 @@ export default function App() {
         orders={shop.orders}
         section={path.split("/")[2] ?? "products"}
         onLogout={logout}
-        onSave={(p) =>
-          perform(shop.products.some(x => x.id === p.id) ? `/products/${p.id}` : "/products", shop.products.some(x => x.id === p.id) ? "PUT" : "POST", p, "상품을 저장했어요.")
-        }
+        onSave={(id, changes) => {
+          const exists = shop.products.some((product) => product.id === id);
+          return perform(exists ? `/products/${id}` : "/products", exists ? "PUT" : "POST", changes, "상품을 저장했어요.");
+        }}
         onDelete={(id) =>
           perform(`/products/${id}`, "DELETE", undefined, "상품 판매를 중지했어요.")
         }

@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "test": "node --test 백업/tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "test:shipping": "node --test tests/defaultAddress.test.mjs"
   },
   "dependencies": {

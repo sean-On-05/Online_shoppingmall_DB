@@ -15,7 +15,10 @@ interface Props {
   products: Product[];
   orders: Order[];
   section: string;
-  onSave: (product: Product) => Promise<string | null>;
+  onSave: (
+    id: number,
+    changes: Partial<Product> & { expectedStock?: number },
+  ) => Promise<string | null>;
   onDelete: (id: number) => Promise<string | null>;
   onResume: (id: number) => Promise<string | null>;
   onStatus: (id: string, status: OrderAction) => Promise<string | null>;
@@ -51,7 +54,7 @@ export default function Admin({
   const actionPending = useRef(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [stockDrafts, setStockDrafts] = useState<Record<number, string>>({});
+  const [stockDrafts, setStockDrafts] = useState<Record<number, { value: string; initialStock: number }>>({});
   const [stockMessage, setStockMessage] = useState("");
   const activeOrder = orders.find((o) => o.id === selectedOrder);
   const filteredProducts = products.filter(
@@ -73,11 +76,17 @@ export default function Admin({
     if (!editing) return;
     const form = new FormData(e.currentTarget);
     const originalPrice = String(form.get("originalPrice")).trim();
-    const result = await onSave({
-      ...editing,
+    const stock = Number(form.get("stock"));
+    const creating = !products.some((product) => product.id === editing.id);
+    const stockUpdate = creating
+      ? { stock }
+      : stock === editing.stock
+        ? {}
+        : { stock, expectedStock: editing.stock };
+    const result = await onSave(editing.id, {
       name: String(form.get("name")).trim(),
       price: Number(form.get("price")),
-      stock: Number(form.get("stock")),
+      ...stockUpdate,
       category: String(form.get("category")),
       image: String(form.get("image")).trim(),
       description: String(form.get("description")).trim(),
@@ -88,14 +97,15 @@ export default function Admin({
     if (!result) setEditing(null);
   }
   async function saveStock(product: Product) {
-    const value = stockDrafts[product.id];
-    if (value === undefined || !value.trim()) {
+    const draft = stockDrafts[product.id];
+    if (!draft?.value.trim()) {
       setStockMessage("재고 수량을 입력해 주세요.");
       return;
     }
-    const result = await onSave({ ...product, stock: Number(value) });
+    const stock = Number(draft.value);
+    const result = await onSave(product.id, { stock, expectedStock: draft.initialStock });
     setStockMessage(
-      result ?? `${product.name} 재고를 ${Number(value)}개로 저장했습니다.`,
+      result ?? `${product.name} 재고를 ${stock}개로 저장했습니다.`,
     );
     if (!result)
       setStockDrafts((current) => {
@@ -382,13 +392,17 @@ export default function Admin({
                           min="0"
                           max="100000"
                           step="1"
-                          value={stockDrafts[p.id] ?? p.stock}
-                          onChange={(e) =>
+                          value={stockDrafts[p.id]?.value ?? p.stock}
+                          onChange={(e) => {
+                            const value = e.target.value;
                             setStockDrafts((current) => ({
                               ...current,
-                              [p.id]: e.target.value,
-                            }))
-                          }
+                              [p.id]: {
+                                value,
+                                initialStock: current[p.id]?.initialStock ?? p.stock,
+                              },
+                            }));
+                          }}
                         />
                         <button
                           className="text-button"

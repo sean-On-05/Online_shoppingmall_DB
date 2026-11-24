@@ -392,17 +392,29 @@ def save(pid=None):
     admin(); b=body()
     def change(s):
         nonlocal pid
-        current_status = product(s,pid)['status'] if pid is not None else '판매중'
-        if pid is not None: product(s,pid)
-        else: pid=max([p['id'] for p in s['products']]+[100])+1
+        current = product(s, pid) if pid is not None else None
+        stock = b.get('stock', current['stock'] if current else None)
+        if current and ('expectedStock' in b or stock != current['stock']):
+            expected_stock = b.get('expectedStock')
+            if 'stock' not in b or (expected_stock is not None and not integer(expected_stock, 0, 100000)):
+                abort(400, '재고 변경 기준을 확인해 주세요.')
+            if expected_stock != current['stock']:
+                abort(409, '재고가 변경되었습니다. 새로고침 후 다시 시도해 주세요.')
+        if current and b.keys() == {'stock', 'expectedStock'}:
+            if not integer(stock, 0, 100000):
+                abort(400, '재고 수량이 잘못되었습니다.')
+            current['stock'] = stock
+            return
+        if pid is None: pid=max([p['id'] for p in s['products']]+[100])+1
         if not isinstance(b.get('name'),str) or not 1<=len(b['name'].strip())<=80: abort(400,'상품명을 확인해 주세요.')
-        if not integer(b.get('price'),1,100000000) or not integer(b.get('stock'),0,100000): abort(400,'가격 또는 재고가 잘못되었습니다.')
+        if not integer(b.get('price'),1,100000000) or not integer(stock,0,100000): abort(400,'가격 또는 재고가 잘못되었습니다.')
         if b.get('originalPrice') is not None and not integer(b['originalPrice'],b['price']+1,100000000): abort(400,'정상가를 확인해 주세요.')
         if b.get('category') not in ['의류','가방','리빙','문구','액세서리']: abort(400,'카테고리를 확인해 주세요.')
         for field in ['image','description']:
             if not isinstance(b.get(field),str) or not b[field].strip(): abort(400,'이미지와 설명이 필요합니다.')
-        p={k:b[k] for k in ['name','price','stock','category','image','description','originalPrice','label'] if k in b and b[k] is not None}; p['id']=pid
-        p['status'] = current_status
+        p={k:b[k] for k in ['name','price','category','image','description','originalPrice','label'] if k in b and b[k] is not None}; p['id']=pid
+        p['stock'] = stock
+        p['status'] = current['status'] if current else '판매중'
         s['products']=[p if x['id']==pid else x for x in s['products']] if any(x['id']==pid for x in s['products']) else [p]+s['products']
     return transact(change)
 @app.delete('/api/products/<int:pid>')

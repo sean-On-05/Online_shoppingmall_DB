@@ -25,7 +25,7 @@ CREATE TABLE SHIPMENT (
     shipment_id INTEGER PRIMARY KEY,
     order_id INTEGER NOT NULL UNIQUE REFERENCES ORDERS(order_id),
     shipping_address TEXT NOT NULL,
-    shipping_status TEXT NOT NULL,
+    shipping_status TEXT,
     recipient TEXT NOT NULL,
     phone TEXT NOT NULL,
     postal_code TEXT NOT NULL,
@@ -49,6 +49,15 @@ shipping = {
     "addressDetail": "101호",
     "memo": "문 앞에 놓아주세요"
 }
+
+# 배송 정보는 주문을 만들 때 저장한다.
+db.execute(
+    """INSERT INTO SHIPMENT
+       (order_id, shipping_address, recipient, phone, postal_code, address_detail, memo)
+       VALUES (1, ?, ?, ?, ?, ?, ?)""",
+    (shipping["address"], shipping["recipient"], shipping["phone"],
+     shipping["postalCode"], shipping["addressDetail"], shipping["memo"])
+)
 
 # 1. 정상 배송 등록
 with db:

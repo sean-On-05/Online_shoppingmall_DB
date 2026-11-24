@@ -465,6 +465,56 @@ def save_state(db, state):
             "save_state()에서는 신규 주문을 생성할 수 없습니다."
         )
 
+def migrate_legacy_orders(db, orders):
+    product_ids = {row[0] for row in db.execute('SELECT product_id FROM PRODUCT')}
+    for order in reversed(orders):
+        shipping_status = order.get('shippingStatus')
+        status = order['status']
+        if status in ('배송준비', '배송중', '배송완료'):
+            shipping_status = shipping_status or status
+            status = '완료' if status == '배송완료' else '처리중'
+        order_id = db.execute(
+            """INSERT INTO ORDERS
+               (order_code, customer_id, owner_key, order_date, subtotal,
+                shipping_fee, total_amount, order_status, warehouse_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+            (order['id'], customer_id(db, order['owner']), order['owner'],
+             order['createdAt'], order['subtotal'], order['shippingFee'],
+             order['total'], status)
+        ).lastrowid
+        for item in order['items']:
+            product_id = item['productId']
+            db.execute(
+                """INSERT INTO ORDER_ITEM
+                   (order_id, product_id, original_product_id, product_name,
+                    image, quantity, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (order_id, product_id if product_id in product_ids else None,
+                 product_id, item['name'], item['image'], item['quantity'], item['price'])
+            )
+        payment = order.get('payment')
+        payment_status = order.get('paymentStatus')
+        if payment or payment_status not in (None, '대기'):
+            if payment_status is None:
+                payment_status = '취소' if status == '취소' else '완료'
+            db.execute(
+                """INSERT INTO PAYMENT (order_id, payment_method, payment_status)
+                   VALUES (?, ?, ?)""",
+                (order_id, payment or '', payment_status)
+            )
+        shipping = order.get('shipping')
+        if shipping or shipping_status:
+            shipping = shipping or {}
+            db.execute(
+                """INSERT INTO SHIPMENT
+                   (order_id, shipping_address, shipping_status, recipient, phone,
+                    postal_code, address_detail, memo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (order_id, shipping.get('address', ''), shipping_status,
+                 shipping.get('recipient', ''), shipping.get('phone', ''),
+                 shipping.get('postalCode', ''), shipping.get('addressDetail', ''),
+                 shipping.get('memo', ''))
+            )
+
+
 def initialize(path):
     with connect(path) as db:
         legacy = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone()
@@ -497,7 +547,9 @@ def initialize(path):
             state['carts']['ADMIN'] = state['carts'].pop('admin')
         for order in state['orders']:
             if order['owner'] == 'admin': order['owner'] = 'ADMIN'
-        save_state(db,state)
+        # Legacy stock already reflects historical orders. Import only their snapshots.
+        save_state(db, {**state, 'orders': []})
+        migrate_legacy_orders(db, state['orders'])
         if db.execute('PRAGMA foreign_key_check').fetchall(): raise ValueError('Foreign key validation failed')
         if legacy: db.execute('DROP TABLE state')
         db.execute('PRAGMA user_version=3')

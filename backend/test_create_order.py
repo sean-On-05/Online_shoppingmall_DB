@@ -140,7 +140,7 @@ with TemporaryDirectory() as temp:
     # 정상 주문 취소
     with connect(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        cancel_order(db, order_code, warehouse_id=1)
+        cancel_order(db, order_code)
 
     with connect(db_path) as db:
         stock = db.execute(

@@ -46,6 +46,7 @@ class ProductVisibilityTest(unittest.TestCase):
         self.assertEqual(customer.get('/api/shop').json['orders'][0], order)
         self.assertEqual(admin.delete(f'/api/products/{pid}').status_code, 409)
         # Even a stale edit request with status=판매중 must preserve the DB status.
+        before['expectedStock'] = admin.get(f'/api/products/{pid}').json['stock']
         before['stock'] = 42
         self.assertEqual(admin.put(f'/api/products/{pid}', json=before).status_code, 200)
         persisted = admin.get(f'/api/products/{pid}').json
@@ -69,6 +70,7 @@ class ProductVisibilityTest(unittest.TestCase):
         self.assertEqual(admin.post('/api/products/999999/resume', json={}).status_code, 404)
         # Resuming does not replenish a sold-out product.
         admin.delete(f'/api/products/{pid}')
+        resumed['expectedStock'] = resumed['stock']
         resumed['stock'] = 0
         admin.put(f'/api/products/{pid}', json=resumed)
         self.assertEqual(admin.post(f'/api/products/{pid}/resume', json={}).status_code, 200)
