@@ -2,7 +2,8 @@
 
 데이터베이스 수업 기말 팀 프로젝트입니다. 숭실대 굿즈를 판매하는 쇼핑몰을 만들고, 주문이 들어오거나 취소될 때 재고가 어떻게 바뀌는지 구현했습니다.
 
-[배포 사이트](https://online-shoppingmall-db.vercel.app/)
+- [배포 사이트](https://online-shoppingmall-db.vercel.app/)
+- [백엔드 API 상태 확인](https://h21yess12.pythonanywhere.com/api/health)
 
 ## 구현한 기능
 
