@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { Product } from "../data";
 import { money, productImage } from "../data";
 import Icon from "./Icon";
@@ -9,7 +8,6 @@ export default function ProductCard({
   product: Product;
   onAdd: (id: number) => void;
 }) {
-  const [liked, setLiked] = useState(false);
   return (
     <article className="product-card">
       <div className="product-image">
@@ -34,14 +32,6 @@ export default function ProductCard({
             {product.label}
           </span>
         )}
-        <button
-          className={`favorite icon-button ${liked ? "liked" : ""}`}
-          aria-label={`${product.name} 찜${liked ? " 취소" : "하기"}`}
-          aria-pressed={liked}
-          onClick={() => setLiked(!liked)}
-        >
-          <Icon name="heart" size={19} />
-        </button>
         <button
           className="add-to-cart"
           disabled={product.stock === 0}

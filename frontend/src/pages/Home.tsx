@@ -80,9 +80,6 @@ export default function Home({
             </h2>
             <p>강의실부터 일상까지. 숭실의 색을 담은 굿즈를 만나보세요.</p>
           </div>
-          <span className="collection-note">
-            MADE FOR YOUR CAMPUS DAYS <Icon name="arrow" size={18} />
-          </span>
         </div>
         <div className="product-toolbar">
           <div className="category-tabs" aria-label="상품 카테고리">
