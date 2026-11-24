@@ -4,6 +4,7 @@
 
 - [배포 사이트](https://online-shoppingmall-db.vercel.app/)
 - [백엔드 API 상태 확인](https://h21yess12.pythonanywhere.com/api/health)
+- [PythonAnywhere 관리 페이지](https://www.pythonanywhere.com/user/h21yess12/) (로그인 및 접근 권한 필요)
 
 ## 구현한 기능
 
