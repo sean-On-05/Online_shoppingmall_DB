@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Modal, ModalBody, ModalHeader } from "flowbite-react";
+import { Modal, ModalBody, ModalFooter, ModalHeader } from "flowbite-react";
 import { categories, money, productImage, type Product } from "../data";
 import {
   orderActions,
@@ -596,6 +596,15 @@ export default function Admin({
         <ModalBody>
           {activeOrder && <OrderDetail order={activeOrder} />}
         </ModalBody>
+        <ModalFooter className="justify-start">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setSelectedOrder(null)}
+          >
+            닫기
+          </button>
+        </ModalFooter>
       </Modal>
       <Modal
         show={!!pendingStatus}
