@@ -73,7 +73,7 @@ sqlite3 -cmd ".timeout 5000" -cmd ".headers on" -cmd ".mode column" "file:shop.s
 
 ### 0. 대상 확인 및 백업
 
-예시는 상품 **101번**과 `user` 계정을 사용합니다. 다른 대상을 쓰려면 백업을 만들기 전에 아래 `WHERE`를 바꾸세요. 같은 연결에서 이 블록을 다시 실행해도 최초 백업값을 유지합니다.
+시연 대상은 상품 **101번**과 발표 계정 **`h21yess`**입니다. 같은 연결에서 이 블록을 다시 실행해도 최초 백업값을 유지합니다. 이전 안내로 기본 `user` 계정을 백업한 창이라면, 바꿔 둔 데이터가 모두 복원됐는지 확인한 뒤 SQLite를 다시 열어 0번을 실행하세요.
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -96,17 +96,18 @@ WHERE product_id = 101;
 
 CREATE TEMP TABLE IF NOT EXISTS demo_member_backup AS
 SELECT customer_id, is_admin, is_active
-FROM CUSTOMER WHERE username = 'user';
+FROM CUSTOMER WHERE username = 'h21yess';
 
 SELECT * FROM demo_inventory_backup;
-SELECT * FROM demo_member_backup;
+SELECT c.username, b.is_admin AS original_is_admin, b.is_active AS original_is_active
+FROM demo_member_backup b JOIN CUSTOMER c USING (customer_id);
 
 SELECT '재고 백업' AS item, COUNT(*) AS rows_saved FROM demo_inventory_backup
 UNION ALL
 SELECT '계정 백업', COUNT(*) FROM demo_member_backup;
 ```
 
-마지막 결과에서 재고 백업이 1행 이상이면 1번을 진행합니다. 2~3번을 실행하려면 계정 백업도 1행이어야 합니다. 원래 재고 수량도 적어 두세요. 주문 목록이 비어 있어도 재고 시연은 가능합니다.
+마지막 결과에서 재고 백업이 1행 이상이면 1번을 진행합니다. 2~3번을 실행하려면 백업에 `h21yess`가 한 행 나오고 원래 값이 `0 | 1`인지 확인하세요. 원래 재고 수량도 적어 두세요. 주문 목록이 비어 있어도 재고 시연은 가능합니다.
 
 ### 1. 재고 소진과 복원
 
@@ -144,33 +145,42 @@ FROM INVENTORY i JOIN demo_inventory_backup b USING (product_id, warehouse_id);
 
 ### 2. 관리자 권한 부여와 회수
 
-**2-A.** 시연 계정에 앱 관리자 권한을 준 뒤 공개 쇼핑몰에서 그 계정으로 로그인합니다.
-
-```sql
-UPDATE CUSTOMER SET is_admin = 1, is_active = 1
-WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
-```
-
-쇼핑몰 탭의 브라우저 개발자 도구 Console에서 아래 코드를 실행하면 `200`이 나옵니다.
+공개 쇼핑몰에서 **`h21yess`로 먼저 로그인**하세요. 쇼핑몰 탭의 개발자 도구 **Console**에서 아래 명령을 입력해 권한 부여 전 **`403`**을 확인합니다.
 
 ```js
 fetch('/api/admin/members').then(response => console.log(response.status))
 ```
 
-**2-B.** 아래 SQL을 실행해 관리자 권한을 회수합니다. 같은 로그인 세션에서 위 요청을 다시 보내 `403`을 확인합니다. 실제 접근 허용 여부는 API 응답으로 확인합니다.
+**2-A. 권한 부여.** PythonAnywhere의 같은 `sqlite>` 창에서 아래 SQL을 실행합니다. 현재 권한이 `1 | 1`이면 로그아웃하지 않고 쇼핑몰 Console에서 같은 명령을 다시 실행해 **`200`**을 확인하세요.
+
+```sql
+UPDATE CUSTOMER SET is_admin = 1
+WHERE username = 'h21yess' AND is_active = 1
+  AND customer_id IN (SELECT customer_id FROM demo_member_backup);
+
+SELECT username, is_admin, is_active
+FROM CUSTOMER WHERE username = 'h21yess';
+```
+
+**2-B. 권한 회수.** 아래 SQL을 실행해 현재 권한이 `0 | 1`로 돌아왔는지 확인합니다. 같은 로그인 세션에서 Console 명령을 한 번 더 실행하면 **`403`**이 나옵니다. `200`은 조회 허용, `403`은 조회 거부입니다. 여기서 시연을 마치면 3-B로 계정 상태를 확인하세요.
 
 ```sql
 UPDATE CUSTOMER SET is_admin = 0
-WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
+WHERE username = 'h21yess'
+  AND customer_id IN (SELECT customer_id FROM demo_member_backup);
+
+SELECT username, is_admin, is_active
+FROM CUSTOMER WHERE username = 'h21yess';
 ```
 
 ### 3. 계정 정지와 원상 복원
 
-**3-A.** 시연 계정이 로그인한 상태에서 아래 SQL로 계정을 정지합니다.
+**3-A.** `h21yess`로 로그인한 상태에서 아래 SQL로 계정을 정지합니다.
 
 ```sql
 UPDATE CUSTOMER SET is_active = 0
-WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
+WHERE username = 'h21yess'
+  AND customer_id IN (SELECT customer_id FROM demo_member_backup);
 ```
 
 정지 직후 같은 브라우저 Console에서 아래 요청을 보내면 `403`이 나옵니다.
@@ -179,7 +189,7 @@ WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
 fetch('/api/me').then(response => console.log(response.status))
 ```
 
-**3-B.** 권한과 계정 상태를 원래 값으로 돌립니다.
+**3-B.** 권한과 계정 상태를 원래 값으로 돌립니다. 결과표에 `h21yess | 0 | 1`이 나오면 복원 완료입니다.
 
 ```sql
 UPDATE CUSTOMER SET
@@ -187,7 +197,11 @@ UPDATE CUSTOMER SET
                 WHERE b.customer_id = CUSTOMER.customer_id),
     is_active = (SELECT b.is_active FROM demo_member_backup b
                  WHERE b.customer_id = CUSTOMER.customer_id)
-WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
+WHERE username = 'h21yess'
+  AND customer_id IN (SELECT customer_id FROM demo_member_backup);
+
+SELECT username, is_admin, is_active
+FROM CUSTOMER WHERE username = 'h21yess';
 ```
 
 ### 4. 제약조건 오류 확인
