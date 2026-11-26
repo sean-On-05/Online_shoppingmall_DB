@@ -56,15 +56,17 @@ npm run dev
 
 ## 발표용 SQL
 
-Flask가 사용하는 **시연용 SQLite 파일**을 `sqlite3` 또는 DB Browser for SQLite에서 엽니다. 아래 블록은 위에서부터 하나씩 실행하세요. 백업용 임시 테이블은 현재 연결에만 남으므로, 복원까지 같은 콘솔이나 연결을 사용합니다. 예시의 첫 상품과 `user`는 실제 시연용 상품과 계정인지 확인한 뒤 진행하세요.
+**DB Browser for SQLite → Open Database → `shop.db` → Execute SQL** 순서로 엽니다. 로컬 쇼핑몰과 DB Browser가 같은 파일을 사용해야 웹 화면에 변경이 보입니다.
+
+각 단계에서 **해당 코드 블록 전체를** 빈 SQL 입력창에 붙여넣고 실행하세요. 기존 SQL이 남아 있으면 지운 뒤 새 블록을 붙여넣으세요. **1~3번에서 데이터를 바꾼 뒤에는 상단의 `Write Changes`(변경사항 저장)**를 누릅니다. DB Browser가 트랜잭션을 관리하므로 `BEGIN IMMEDIATE`나 `COMMIT`을 추가하지 않습니다.
+
+**발표 순서**는 0번 백업 → 1-A 실행·저장 → 로컬 쇼핑몰 새로고침 → 1-B 실행·저장입니다. 복원까지 DB 파일을 닫지 마세요. 2번 이후의 권한 및 예외 검증은 필요한 항목만 실행하면 됩니다.
 
 ### 0. 대상 확인 및 백업
 
-```sql
--- 트랜잭션을 열기 전에 실행합니다. foreign_keys의 결과는 1이어야 합니다.
-PRAGMA foreign_keys = ON;
-PRAGMA foreign_keys;
+예시는 상품 ID가 가장 작은 상품과 `user` 계정을 사용합니다. 다른 대상을 쓰려면 **백업을 만들기 전에** 아래 `WHERE`를 바꾸세요. 같은 연결에서 이 블록을 다시 실행해도 최초 백업값을 유지합니다.
 
+```sql
 SELECT product_id, product_name, price, status
 FROM PRODUCT ORDER BY product_id;
 
@@ -76,39 +78,37 @@ LEFT JOIN PAYMENT p USING (order_id)
 LEFT JOIN SHIPMENT s USING (order_id)
 ORDER BY o.order_id DESC;
 
-CREATE TEMP TABLE demo_inventory_backup AS
+CREATE TEMP TABLE IF NOT EXISTS demo_inventory_backup AS
 SELECT * FROM INVENTORY
 WHERE product_id = (SELECT MIN(product_id) FROM PRODUCT);
 
-CREATE TEMP TABLE demo_member_backup AS
+CREATE TEMP TABLE IF NOT EXISTS demo_member_backup AS
 SELECT customer_id, is_admin, is_active
 FROM CUSTOMER WHERE username = 'user';
 
-SELECT * FROM demo_inventory_backup;
-SELECT * FROM demo_member_backup;
+SELECT '재고 백업' AS item, COUNT(*) AS rows_saved FROM demo_inventory_backup
+UNION ALL
+SELECT '계정 백업', COUNT(*) FROM demo_member_backup;
 ```
 
-두 백업 조회 모두 결과가 있어야 합니다. 다른 상품이나 회원으로 시연하려면 백업을 만들기 전에 각 `WHERE` 조건을 바꾸세요. 배송 상태 시연에는 배송 정보가 저장된 주문이 필요합니다.
+마지막 결과에서 재고 백업이 1행 이상이면 1번을 진행합니다. 2~3번을 실행하려면 계정 백업도 1행이어야 합니다. 주문 목록이 비어 있어도 재고 시연은 가능합니다.
 
 ### 1. 재고 소진과 복원
 
-**1-A.** 재고를 0으로 만든 뒤 웹을 새로고침해 품절과 구매 제한을 확인합니다.
+**1-A. 재고 0개로 변경.** 블록을 실행해 `quantity`가 0인지 확인한 뒤 **Write Changes**를 누릅니다. 로컬 쇼핑몰을 새로고침해 품절 표시를 확인하세요.
 
 ```sql
-BEGIN IMMEDIATE;
 UPDATE INVENTORY SET quantity = 0
 WHERE product_id IN (SELECT product_id FROM demo_inventory_backup);
-COMMIT;
 
 SELECT p.product_name, i.warehouse_id, i.quantity
 FROM INVENTORY i JOIN PRODUCT p USING (product_id)
 WHERE i.product_id IN (SELECT product_id FROM demo_inventory_backup);
 ```
 
-**1-B.** 확인을 마치면 창고별 재고를 복원합니다.
+**1-B. 재고 복원.** 아래 블록을 실행하고 **Write Changes**를 누른 뒤 웹을 새로고침합니다. 결과표의 `quantity`와 `original_quantity`가 같아야 합니다.
 
 ```sql
-BEGIN IMMEDIATE;
 UPDATE INVENTORY
 SET quantity = (
     SELECT b.quantity FROM demo_inventory_backup b
@@ -120,18 +120,18 @@ WHERE EXISTS (
     WHERE b.product_id = INVENTORY.product_id
       AND b.warehouse_id = INVENTORY.warehouse_id
 );
-COMMIT;
+
+SELECT i.product_id, i.warehouse_id, i.quantity, b.quantity AS original_quantity
+FROM INVENTORY i JOIN demo_inventory_backup b USING (product_id, warehouse_id);
 ```
 
 ### 2. 관리자 권한 부여와 회수
 
-**2-A.** 시연 계정에 앱 관리자 권한을 주고 그 계정으로 로그인합니다.
+**2-A.** 시연 계정에 앱 관리자 권한을 준 뒤 **Write Changes**를 누르고 그 계정으로 로그인합니다.
 
 ```sql
-BEGIN IMMEDIATE;
 UPDATE CUSTOMER SET is_admin = 1, is_active = 1
 WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
-COMMIT;
 ```
 
 쇼핑몰 탭의 브라우저 개발자 도구 Console에서 아래 코드를 실행하면 `200`이 나옵니다.
@@ -140,24 +140,20 @@ COMMIT;
 fetch('/api/admin/members').then(response => console.log(response.status))
 ```
 
-**2-B.** 관리자 권한을 회수하고, 같은 로그인 세션에서 위 요청을 다시 보내 `403`을 확인합니다. 실제 접근 허용 여부는 API 응답으로 확인합니다.
+**2-B.** 관리자 권한을 회수하고 **Write Changes**를 누릅니다. 같은 로그인 세션에서 위 요청을 다시 보내 `403`을 확인합니다. 실제 접근 허용 여부는 API 응답으로 확인합니다.
 
 ```sql
-BEGIN IMMEDIATE;
 UPDATE CUSTOMER SET is_admin = 0
 WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
-COMMIT;
 ```
 
 ### 3. 계정 정지와 원상 복원
 
-**3-A.** 시연 계정이 로그인한 상태에서 계정을 정지합니다.
+**3-A.** 시연 계정이 로그인한 상태에서 계정을 정지하고 **Write Changes**를 누릅니다.
 
 ```sql
-BEGIN IMMEDIATE;
 UPDATE CUSTOMER SET is_active = 0
 WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
-COMMIT;
 ```
 
 정지 직후 같은 브라우저 Console에서 아래 요청을 보내면 `403`이 나옵니다.
@@ -166,70 +162,60 @@ COMMIT;
 fetch('/api/me').then(response => console.log(response.status))
 ```
 
-**3-B.** 권한과 계정 상태를 원래 값으로 돌립니다.
+**3-B.** 권한과 계정 상태를 원래 값으로 돌린 뒤 **Write Changes**를 누릅니다.
 
 ```sql
-BEGIN IMMEDIATE;
 UPDATE CUSTOMER SET
     is_admin = (SELECT b.is_admin FROM demo_member_backup b
                 WHERE b.customer_id = CUSTOMER.customer_id),
     is_active = (SELECT b.is_active FROM demo_member_backup b
                  WHERE b.customer_id = CUSTOMER.customer_id)
 WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
-COMMIT;
 ```
 
 ### 4. 제약조건 오류 확인
 
-아래 블록은 하나씩 실행합니다. 예상 오류에서 SQL 도구가 실행을 멈추면 해당 블록의 `ROLLBACK TO`와 `RELEASE`를 이어서 실행합니다.
+각 블록은 하나씩 실행합니다. 표시된 제약조건 오류가 나오면 해당 SQL 문장이 거절된 것입니다.
 
 **4-A. 음수 재고** — `CHECK constraint failed`
 
 ```sql
-SAVEPOINT demo_negative;
 UPDATE INVENTORY SET quantity = -1
 WHERE product_id = (SELECT MIN(product_id) FROM INVENTORY);
-ROLLBACK TO demo_negative;
-RELEASE demo_negative;
 ```
 
 **4-B. 중복 아이디** — `UNIQUE constraint failed`
 
 ```sql
-SAVEPOINT demo_duplicate;
 INSERT INTO CUSTOMER (username, name, password_hash)
 SELECT username, '중복 테스트', 'not-a-login-hash'
 FROM CUSTOMER ORDER BY customer_id LIMIT 1;
-ROLLBACK TO demo_duplicate;
-RELEASE demo_duplicate;
 ```
 
-**4-C. 존재하지 않는 상품의 재고** — `FOREIGN KEY constraint failed`. 창고가 하나 이상 있어야 합니다.
+**4-C. 존재하지 않는 상품의 재고** — `FOREIGN KEY constraint failed`. 창고가 하나 이상 있어야 합니다. 아래 확인 블록의 결과가 `1`일 때만 INSERT를 실행하세요. `0`이면 보류 중인 변경을 먼저 저장하거나 복원하고, DB Browser의 **Edit Pragmas**에서 **Foreign Keys**를 켠 뒤 다시 확인하세요.
 
 ```sql
-SAVEPOINT demo_foreign_key;
+PRAGMA foreign_keys;
+```
+
+```sql
 INSERT INTO INVENTORY (product_id, warehouse_id, quantity)
 SELECT (SELECT COALESCE(MAX(product_id), 0) + 1 FROM PRODUCT),
        MIN(warehouse_id), 1
 FROM WAREHOUSE
 HAVING COUNT(*) > 0;
-ROLLBACK TO demo_foreign_key;
-RELEASE demo_foreign_key;
 ```
 
 **4-D. 주문 합계 불일치** — `CHECK constraint failed`. 주문이 하나 이상 있어야 합니다.
 
 ```sql
-SAVEPOINT demo_total;
 UPDATE ORDERS SET total_amount = subtotal + shipping_fee + 1
 WHERE order_id = (SELECT MIN(order_id) FROM ORDERS);
-ROLLBACK TO demo_total;
-RELEASE demo_total;
 ```
 
 ### 5. DB 제약조건과 앱의 주문 규칙
 
-현재 스키마에서는 주문 상태와 배송 상태의 허용값을 각각 검사합니다. SQL로 직접 쓰면 취소 주문에 배송완료를 지정할 수 있습니다. 배송 정보가 있는 주문으로 SQL 화면에서만 확인하고, 같은 블록에서 변경을 되돌립니다.
+현재 스키마에서는 주문 상태와 배송 상태의 허용값을 각각 검사합니다. SQL로 직접 쓰면 취소 주문에 배송완료를 지정할 수 있습니다. 배송 정보가 있는 주문이 있을 때 블록 전체를 실행합니다. 마지막 두 줄이 변경을 되돌리므로 이 단계에서는 **Write Changes를 누르지 않습니다**. 중간에 오류로 멈추면 아래 블록 끝의 `ROLLBACK TO demo_cross_table;`과 `RELEASE demo_cross_table;`을 실행해 되돌리세요.
 
 ```sql
 SAVEPOINT demo_cross_table;
