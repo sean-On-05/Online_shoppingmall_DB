@@ -232,9 +232,10 @@ PRAGMA foreign_keys;
 ```sql
 INSERT INTO INVENTORY (product_id, warehouse_id, quantity)
 SELECT (SELECT COALESCE(MAX(product_id), 0) + 1 FROM PRODUCT),
-       MIN(warehouse_id), 1
+       warehouse_id, 1
 FROM WAREHOUSE
-HAVING COUNT(*) > 0;
+ORDER BY warehouse_id
+LIMIT 1;
 ```
 
 **4-D. 주문 합계 불일치** — `CHECK constraint failed`. 주문이 하나 이상 있어야 합니다.
