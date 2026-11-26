@@ -56,17 +56,29 @@ npm run dev
 
 ## 발표용 SQL
 
-**DB Browser for SQLite → Open Database → `shop.db` → Execute SQL** 순서로 엽니다. 로컬 쇼핑몰과 DB Browser가 같은 파일을 사용해야 웹 화면에 변경이 보입니다.
+발표에서는 **PythonAnywhere의 Bash**에서 배포 DB를 열고, 결과는 **공개 쇼핑몰**에서 확인합니다.
 
-각 단계에서 **해당 코드 블록 전체를** 빈 SQL 입력창에 붙여넣고 실행하세요. 기존 SQL이 남아 있으면 지운 뒤 새 블록을 붙여넣으세요. **1~3번에서 데이터를 바꾼 뒤에는 상단의 `Write Changes`(변경사항 저장)**를 누릅니다. DB Browser가 트랜잭션을 관리하므로 `BEGIN IMMEDIATE`나 `COMMIT`을 추가하지 않습니다.
+### 배포 DB 열기
 
-**발표 순서**는 0번 백업 → 1-A 실행·저장 → 로컬 쇼핑몰 새로고침 → 1-B 실행·저장입니다. 복원까지 DB 파일을 닫지 마세요. 2번 이후의 권한 및 예외 검증은 필요한 항목만 실행하면 됩니다.
+PythonAnywhere의 **Consoles → Bash**를 엽니다. 프로젝트 루트에서 아래 두 줄을 실행하세요. 이미 프롬프트 경로가 `~/Online_shoppingmall_DB/backend`로 끝나면 첫 줄은 건너뜁니다. 홈 폴더에서 시작했다면 먼저 `cd ~/Online_shoppingmall_DB`를 실행하세요.
+
+```bash
+cd backend
+sqlite3 -cmd ".timeout 5000" -cmd ".headers on" -cmd ".mode column" "file:shop.sqlite3?mode=rw"
+```
+
+`shop.sqlite3`는 Flask의 기본 DB입니다. 배포 설정에 `SHOP_DATABASE`가 있으면 명령의 파일명을 **그 DB의 실제 경로**로 바꾸세요. `mode=rw`는 파일이 없을 때 새 DB를 만드는 대신 오류를 반환합니다.
+
+`sqlite>`가 뜨면 아래 SQL 블록을 **한 단계씩** 붙여넣으세요. 1~3번의 변경은 실행에 성공하면 바로 저장됩니다. **복원이 끝날 때까지 같은 SQLite 콘솔을 열어 두세요.**
 
 ### 0. 대상 확인 및 백업
 
-예시는 상품 ID가 가장 작은 상품과 `user` 계정을 사용합니다. 다른 대상을 쓰려면 **백업을 만들기 전에** 아래 `WHERE`를 바꾸세요. 같은 연결에서 이 블록을 다시 실행해도 최초 백업값을 유지합니다.
+예시는 상품 **101번**과 `user` 계정을 사용합니다. 다른 대상을 쓰려면 백업을 만들기 전에 아래 `WHERE`를 바꾸세요. 같은 연결에서 이 블록을 다시 실행해도 최초 백업값을 유지합니다.
 
 ```sql
+PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys;
+
 SELECT product_id, product_name, price, status
 FROM PRODUCT ORDER BY product_id;
 
@@ -80,33 +92,38 @@ ORDER BY o.order_id DESC;
 
 CREATE TEMP TABLE IF NOT EXISTS demo_inventory_backup AS
 SELECT * FROM INVENTORY
-WHERE product_id = (SELECT MIN(product_id) FROM PRODUCT);
+WHERE product_id = 101;
 
 CREATE TEMP TABLE IF NOT EXISTS demo_member_backup AS
 SELECT customer_id, is_admin, is_active
 FROM CUSTOMER WHERE username = 'user';
+
+SELECT * FROM demo_inventory_backup;
+SELECT * FROM demo_member_backup;
 
 SELECT '재고 백업' AS item, COUNT(*) AS rows_saved FROM demo_inventory_backup
 UNION ALL
 SELECT '계정 백업', COUNT(*) FROM demo_member_backup;
 ```
 
-마지막 결과에서 재고 백업이 1행 이상이면 1번을 진행합니다. 2~3번을 실행하려면 계정 백업도 1행이어야 합니다. 주문 목록이 비어 있어도 재고 시연은 가능합니다.
+마지막 결과에서 재고 백업이 1행 이상이면 1번을 진행합니다. 2~3번을 실행하려면 계정 백업도 1행이어야 합니다. 원래 재고 수량도 적어 두세요. 주문 목록이 비어 있어도 재고 시연은 가능합니다.
 
 ### 1. 재고 소진과 복원
 
-**1-A. 재고 0개로 변경.** 블록을 실행해 `quantity`가 0인지 확인한 뒤 **Write Changes**를 누릅니다. 로컬 쇼핑몰을 새로고침해 품절 표시를 확인하세요.
+**1-A. 재고 0개로 변경.** 블록을 실행해 `quantity`가 0인지 확인하세요. [공개 쇼핑몰의 101번 상품 상세](https://online-shoppingmall-db.vercel.app/#/products/101)를 새로고침해 품절 표시를 확인합니다.
 
 ```sql
 UPDATE INVENTORY SET quantity = 0
-WHERE product_id IN (SELECT product_id FROM demo_inventory_backup);
+WHERE (product_id, warehouse_id) IN (
+    SELECT product_id, warehouse_id FROM demo_inventory_backup
+);
 
 SELECT p.product_name, i.warehouse_id, i.quantity
 FROM INVENTORY i JOIN PRODUCT p USING (product_id)
 WHERE i.product_id IN (SELECT product_id FROM demo_inventory_backup);
 ```
 
-**1-B. 재고 복원.** 아래 블록을 실행하고 **Write Changes**를 누른 뒤 웹을 새로고침합니다. 결과표의 `quantity`와 `original_quantity`가 같아야 합니다.
+**1-B. 재고 복원.** 아래 블록을 실행한 뒤 공개 쇼핑몰을 다시 새로고침합니다. 결과표의 `quantity`와 `original_quantity`가 같아야 합니다.
 
 ```sql
 UPDATE INVENTORY
@@ -127,7 +144,7 @@ FROM INVENTORY i JOIN demo_inventory_backup b USING (product_id, warehouse_id);
 
 ### 2. 관리자 권한 부여와 회수
 
-**2-A.** 시연 계정에 앱 관리자 권한을 준 뒤 **Write Changes**를 누르고 그 계정으로 로그인합니다.
+**2-A.** 시연 계정에 앱 관리자 권한을 준 뒤 공개 쇼핑몰에서 그 계정으로 로그인합니다.
 
 ```sql
 UPDATE CUSTOMER SET is_admin = 1, is_active = 1
@@ -140,7 +157,7 @@ WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
 fetch('/api/admin/members').then(response => console.log(response.status))
 ```
 
-**2-B.** 관리자 권한을 회수하고 **Write Changes**를 누릅니다. 같은 로그인 세션에서 위 요청을 다시 보내 `403`을 확인합니다. 실제 접근 허용 여부는 API 응답으로 확인합니다.
+**2-B.** 아래 SQL을 실행해 관리자 권한을 회수합니다. 같은 로그인 세션에서 위 요청을 다시 보내 `403`을 확인합니다. 실제 접근 허용 여부는 API 응답으로 확인합니다.
 
 ```sql
 UPDATE CUSTOMER SET is_admin = 0
@@ -149,7 +166,7 @@ WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
 
 ### 3. 계정 정지와 원상 복원
 
-**3-A.** 시연 계정이 로그인한 상태에서 계정을 정지하고 **Write Changes**를 누릅니다.
+**3-A.** 시연 계정이 로그인한 상태에서 아래 SQL로 계정을 정지합니다.
 
 ```sql
 UPDATE CUSTOMER SET is_active = 0
@@ -162,7 +179,7 @@ WHERE customer_id IN (SELECT customer_id FROM demo_member_backup);
 fetch('/api/me').then(response => console.log(response.status))
 ```
 
-**3-B.** 권한과 계정 상태를 원래 값으로 돌린 뒤 **Write Changes**를 누릅니다.
+**3-B.** 권한과 계정 상태를 원래 값으로 돌립니다.
 
 ```sql
 UPDATE CUSTOMER SET
@@ -192,7 +209,7 @@ SELECT username, '중복 테스트', 'not-a-login-hash'
 FROM CUSTOMER ORDER BY customer_id LIMIT 1;
 ```
 
-**4-C. 존재하지 않는 상품의 재고** — `FOREIGN KEY constraint failed`. 창고가 하나 이상 있어야 합니다. 아래 확인 블록의 결과가 `1`일 때만 INSERT를 실행하세요. `0`이면 보류 중인 변경을 먼저 저장하거나 복원하고, DB Browser의 **Edit Pragmas**에서 **Foreign Keys**를 켠 뒤 다시 확인하세요.
+**4-C. 존재하지 않는 상품의 재고** — `FOREIGN KEY constraint failed`. 창고가 하나 이상 있어야 합니다. 아래 확인 블록의 결과가 `1`일 때만 INSERT를 실행하세요. `0`이면 0번의 `PRAGMA foreign_keys = ON;`을 실행하고 다시 확인하세요.
 
 ```sql
 PRAGMA foreign_keys;
@@ -215,7 +232,7 @@ WHERE order_id = (SELECT MIN(order_id) FROM ORDERS);
 
 ### 5. DB 제약조건과 앱의 주문 규칙
 
-현재 스키마에서는 주문 상태와 배송 상태의 허용값을 각각 검사합니다. SQL로 직접 쓰면 취소 주문에 배송완료를 지정할 수 있습니다. 배송 정보가 있는 주문이 있을 때 블록 전체를 실행합니다. 마지막 두 줄이 변경을 되돌리므로 이 단계에서는 **Write Changes를 누르지 않습니다**. 중간에 오류로 멈추면 아래 블록 끝의 `ROLLBACK TO demo_cross_table;`과 `RELEASE demo_cross_table;`을 실행해 되돌리세요.
+현재 스키마에서는 주문 상태와 배송 상태의 허용값을 각각 검사합니다. SQL로 직접 쓰면 취소 주문에 배송완료를 지정할 수 있습니다. 배송 정보가 있는 주문이 있을 때 블록 전체를 실행합니다. 마지막 두 줄이 변경을 되돌리므로 이 단계의 변경은 웹에 반영되지 않습니다. 중간에 오류로 멈추면 아래 블록 끝의 `ROLLBACK TO demo_cross_table;`과 `RELEASE demo_cross_table;`을 실행해 되돌리세요.
 
 ```sql
 SAVEPOINT demo_cross_table;
@@ -250,3 +267,12 @@ FROM CUSTOMER c JOIN demo_member_backup b USING (customer_id);
 ```
 
 SQLite는 `GRANT`와 `REVOKE`를 지원하지 않습니다. 여기서 바꾸는 `CUSTOMER.is_admin`은 쇼핑몰 앱의 역할입니다.
+
+
+### SQLite 종료
+
+재고와 권한 복원을 확인한 뒤 `sqlite>`에서 아래 명령을 입력합니다. Bash로 돌아가면 `clear`로 화면을 지울 수 있습니다.
+
+```text
+.quit
+```
